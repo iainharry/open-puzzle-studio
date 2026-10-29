@@ -1,0 +1,7 @@
+node_modules
+dist
+smoke.png
+*.local
+
+# Vitest writes these beside the config while it runs.
+*.timestamp-*.mjs

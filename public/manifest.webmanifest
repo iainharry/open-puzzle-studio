@@ -1,0 +1,14 @@
+{
+  "name": "Open Puzzle Studio",
+  "short_name": "Puzzles",
+  "id": "/open-puzzle-studio/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14161a",
+  "theme_color": "#14161a",
+  "description": "Logic puzzles for a classroom. Free, offline, no account.",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,197 @@
+:root {
+  --bg: #14161a;
+  --panel: #1b1f26;
+  --control: #222831;
+  --line: #333a44;
+  --text: #e8edf5;
+  --muted: #99a1ae;
+  --accent: #6aa9ff;
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --control: #eef0f4;
+  --line: #c8ccd4;
+  --text: #1b2028;
+  --muted: #5d6673;
+  --accent: #2563eb;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* A flex column, not a three-row grid. Hiding a row in a grid hands its stretch to a
+   different row, which in the jigsaw app shrank the board by 41% on a button meant to
+   enlarge it. Flex does the obvious thing. */
+.ops {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  margin-right: 8px;
+  color: var(--accent);
+}
+
+.divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 4px;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.btn,
+.field select,
+.field input {
+  /* 34px: a toolbar button has to be hittable with a thumb on a tablet, which is where
+     this app is mostly going to be used. */
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.field input {
+  cursor: text;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.btn:hover:not(:disabled),
+.btn:focus-visible {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The chosen tool, said with colour *and* weight — colour alone would be invisible to a
+   colour-blind player, and this is the control that decides what every tap does. */
+.btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #06101d;
+  font-weight: 600;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.board {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.version {
+  opacity: 0.6;
+}
+
+.library {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+.library[hidden] {
+  display: none !important;
+}
+
+.lib-panel {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.lib-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.lib-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  margin-bottom: 8px;
+}
+
+.lib-sub,
+.lib-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lib-actions {
+  display: flex;
+  gap: 6px;
+}
