@@ -143,6 +143,7 @@ body {
   opacity: 0.6;
 }
 
+.help,
 .library {
   position: fixed;
   inset: 0;
@@ -153,6 +154,7 @@ body {
   background: rgb(0 0 0 / 55%);
 }
 
+.help[hidden],
 .library[hidden] {
   display: none !important;
 }
@@ -194,4 +196,28 @@ body {
 .lib-actions {
   display: flex;
   gap: 6px;
+}
+
+
+/* How to play. A stopgap until the generated guide arrives in M4 — but a nonogram with
+   no statement of its rules is unplayable by the child this app is aimed at, and "it is
+   a later milestone" is a weak answer to that. */
+.help-body {
+  line-height: 1.55;
+}
+
+.help-body p,
+.help-body li {
+  margin: 0 0 8px;
+}
+
+.help-body ul {
+  padding-left: 20px;
+}
+
+.help-note {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
 }

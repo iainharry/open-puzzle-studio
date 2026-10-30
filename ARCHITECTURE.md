@@ -89,7 +89,58 @@ only because the check printed *what* undo restored rather than merely that it r
 something. The fix was `beginChange`/`endChange` bracketing a whole pointer stroke, and the
 assertion is now explicit.
 
-## 6. Decisions deliberately deferred
+## 6. Generation, measured (M2)
+
+The solver came first, and everything else fell out of it. The numbers, on a desktop,
+five puzzles per cell:
+
+| Board | Gentle | Steady | Tricky |
+| --- | --- | --- | --- |
+| 5x5 | <1ms | 12ms | 24ms |
+| 10x10 | <1ms | 1ms | 13ms |
+| 15x15 | 9ms | 1ms | 58ms |
+| 20x20 | 85ms | 3ms | **307ms avg, 775ms worst** |
+
+Three things in that table are worth saying out loud.
+
+**Generation blocks the main thread.** 775ms on a desktop is comfortably long enough on a
+tablet to look like the app has died. M2 says "Making a picture…" and yields a frame so
+the message paints — a courtesy, not a fix. The fix is a worker, and it is in the
+limitations list rather than pretended away.
+
+**A 20x20 Gentle is nearly impossible, and that is a fact about nonograms.** Trivial
+line rules alone cannot usually finish a board that size, so the search spends its whole
+budget (386 attempts) and falls back. The app then reports the difficulty it *achieved*
+rather than the one requested, because a puzzle labelled Gentle that needs real work is a
+lie told to a child.
+
+**Steady is cheaper than Gentle on large boards.** Counter-intuitive and correct: the
+complete line solver finishes almost any blob picture, so the search accepts on the first
+or second try, while the gentle search rejects hundreds. The cost of generation tracks how
+*rare* the requested difficulty is, not how hard the puzzle is.
+
+## 7. Two bugs the solver tests caught, and why they were the dangerous kind
+
+Both produced **confidently wrong answers** rather than missing ones, which is worse: a
+solver that finds nothing is obvious, and a solver that deduces a square that is not
+filled will cheerfully certify an unsolvable puzzle as solvable.
+
+**`packRight` returned run positions in reverse order.** The overlap rule then compared
+run 0's leftmost placement against run k-1's rightmost, and "deduced" filled squares in a
+line where nothing was certain. The heart failed to solve, which is how it surfaced — but
+the first symptom was a *contradiction*, two steps downstream of the actual error.
+
+**`trivialLine` painted over squares already known the other way.** A 2x2 whose columns
+say "empty" and whose rows say "filled" is a contradiction; the rows ran first and the
+columns silently overwrote them, producing a "solved" grid from impossible clues. Now any
+write that disagrees with a known square returns `'impossible'`.
+
+Also worth recording: **three of the solver tests were wrong, not the solver.** Each
+asserted a deduction that no arrangement actually supports. They were only caught by
+working the line out by hand after the code disagreed — which is the right order, and the
+temptation was to "fix" the solver to match the test.
+
+## 8. Decisions deliberately deferred
 
 - **Cell size has no upper bound.** A 5×5 fills a desktop screen at 109px per cell, which
   looks odd to an adult and may be exactly right for a five-year-old on a tablet. Capping
@@ -99,6 +150,17 @@ assertion is now explicit.
 - **Printing, assistance levels, a generated guide and the celebration** are all M4 and
   all largely copied from the jigsaw app; none of them is interesting until there is a real
   puzzle to print.
+
+## 9. Known limitations
+
+- **Generation blocks the UI.** Up to ~775ms measured for a tricky 20x20, and more on a
+  tablet. Wants a worker.
+- **Large boards cannot be Gentle.** The app falls back and reports honestly, but a person
+  who asks for 20x20 Gentle will not get it. Explaining *why* in the app is M4's job.
+- **Hints are not surfaced.** `solve()` already returns the next deduction and its reason
+  from the player's own board; nothing in the shell asks for it yet. That is M3, and it is
+  one function call.
+- **No printing, no guide, no assistance levels, no celebration.** M4.
 
 ## Dependencies
 

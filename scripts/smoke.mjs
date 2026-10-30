@@ -87,6 +87,10 @@ const opening = await page.evaluate(() => {
     cell: layout.cell,
     status: document.querySelector('.status').textContent,
     tools: [...document.querySelectorAll('[data-act="tool"]')].map((b) => b.textContent),
+    untitled: [...document.querySelectorAll('.bar .btn, .bar .field')].filter(
+      (el) => !el.getAttribute('title'),
+    ).length,
+    hasHelp: !!document.querySelector('[data-act="help"]'),
   };
 });
 check('the board paints something', opening.colours > 2, `${opening.colours} colour buckets`);
@@ -95,6 +99,10 @@ check('a 5x5 grid with a clue margin is laid out', opening.rows === 5 && opening
 // render/scene.ts, and is one of the things the first playtest is for.
 check('and the cells are big enough to press', opening.cell >= 22, `${opening.cell}px cells`);
 check('the shell got its tools from the module, not from itself', opening.tools.join(',') === 'Fill,Cross out', opening.tools.join(', '));
+// Every control says what it does. Tooltips are the desktop half of that and a tablet
+// gets none of them, which is why How to play is a button and not only a hover.
+check('every control in the toolbar explains itself', opening.untitled === 0, `${opening.untitled} control(s) with no hover text`);
+check('and the rules are reachable without leaving the app', opening.hasHelp === true);
 check('and it opens unsolved', /0% of the picture/.test(opening.status), opening.status);
 
 // 2. A press on the canvas becomes a mark. This is the seam.
@@ -222,13 +230,68 @@ check('and it is still finished', reloaded.solved === true, reloaded.status);
 const viaCode = await page.evaluate(() => document.querySelector('.code').value);
 await page.goto(`http://127.0.0.1:${port}${BASE}#${viaCode}`, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => globalThis.__ops?.session !== null, { timeout: 10_000 });
-await page.waitForTimeout(300);
+await page.waitForTimeout(400);
 const fromCode = await page.evaluate(() => ({
   title: globalThis.__ops.session.puzzle.title,
   code: document.querySelector('.code').value,
 }));
 check('a game code opens the puzzle it names', fromCode.code === viaCode, `${viaCode} -> ${fromCode.code}`);
 check('and it is a fresh board, not the finished one', /Heart|House|Tree/.test(fromCode.title), fromCode.title);
+
+// 7. Generated puzzles — the whole point of M2. Made at a size and a difficulty, solvable
+// by reasoning, and the same code gives the same picture on any device.
+const generated = await page.evaluate(async () => {
+  const app = globalThis.__ops;
+  const out = {};
+  const makeOne = async (size, tier) => {
+    document.querySelector('.size').value = String(size);
+    document.querySelector('.tier').value = tier;
+    document.querySelector('[data-act="new"]').click();
+    await new Promise((r) => setTimeout(r, 2500));
+    const puzzle = app.session.puzzle;
+    return {
+      rows: puzzle.rows,
+      cols: puzzle.cols,
+      tierUsed: puzzle.tierUsed,
+      title: puzzle.title,
+      code: document.querySelector('.code').value,
+      status: document.querySelector('.status').textContent,
+      filled: puzzle.solution.filter(Boolean).length,
+      // Solve it with the app's own solver, from blank, allowing everything. A puzzle it
+      // cannot finish is one a player cannot finish without guessing.
+      solvable: app.session.module.solve(puzzle, app.session.module.start(puzzle), 3).solved,
+    };
+  };
+
+  out.gentle = await makeOne(10, 'gentle');
+  out.steady = await makeOne(10, 'steady');
+  out.tricky = await makeOne(12, 'tricky');
+
+  // The same code, opened again, must give the identical picture.
+  const code = out.steady.code;
+  const before = out.steady;
+  location.hash = code;
+  location.reload();
+  return { ...out, reopenCode: code, beforeSolution: before.filled };
+}, []);
+check('a puzzle can be made at a chosen size', generated.steady.rows === 10 && generated.steady.cols === 10, `${generated.steady.cols}x${generated.steady.rows}`);
+// The claim the generator rests on: no guessing is ever required.
+check('every generated puzzle can be solved by reasoning', generated.gentle.solvable && generated.steady.solvable && generated.tricky.solvable);
+check('and the difficulty asked for is the difficulty given', generated.gentle.tierUsed === 1 && generated.steady.tierUsed === 2 && generated.tricky.tierUsed === 3, `gentle=${generated.gentle.tierUsed} steady=${generated.steady.tierUsed} tricky=${generated.tricky.tierUsed}`);
+// Reported rather than assumed: the status line shows what the solver measured.
+check('and the app tells the player which it is', /Gentle/.test(generated.gentle.status) && /Tricky/.test(generated.tricky.status), `${generated.gentle.status} | ${generated.tricky.status}`);
+check('and the picture is worth looking at', generated.steady.filled > 20 && generated.steady.filled < 76, `${generated.steady.filled} of 100 squares filled`);
+
+// 8. The same code gives the same picture — on a reload, which is as close to "another
+// device" as this test can get.
+await page.waitForFunction(() => globalThis.__ops?.session !== null, { timeout: 15_000 });
+await page.waitForTimeout(600);
+const reopened2 = await page.evaluate(() => ({
+  code: document.querySelector('.code').value,
+  filled: globalThis.__ops.session.puzzle.solution.filter(Boolean).length,
+  rows: globalThis.__ops.session.puzzle.rows,
+}));
+check('the same code gives back the same picture', reopened2.code === generated.reopenCode && reopened2.filled === generated.beforeSolution, `${reopened2.filled} vs ${generated.beforeSolution} squares`);
 
 check('nothing threw along the way', errors.length === 0, errors.slice(0, 3).join(' | '));
 

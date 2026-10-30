@@ -4,7 +4,7 @@ import { PICTURE_NAMES, cluesFor, pictureLogic } from '../index.js';
 import type { PicturePuzzle, PictureState } from '../index.js';
 
 function open(picture = 'heart'): Session {
-  return Session.create(pictureLogic, { picture });
+  return Session.create(pictureLogic, { kind: 'drawn' as const, picture });
 }
 
 function puzzleOf(session: Session): PicturePuzzle {
@@ -53,8 +53,8 @@ describe('generate', () => {
    */
   it('is deterministic', () => {
     for (const picture of PICTURE_NAMES) {
-      const a = pictureLogic.generate({ picture });
-      const b = pictureLogic.generate({ picture });
+      const a = pictureLogic.generate({ kind: 'drawn' as const, picture });
+      const b = pictureLogic.generate({ kind: 'drawn' as const, picture });
       expect(a.solution).toEqual(b.solution);
       expect(a.rowClues).toEqual(b.rowClues);
     }
@@ -62,14 +62,14 @@ describe('generate', () => {
 
   it('has every starter picture rectangular and non-empty', () => {
     for (const picture of PICTURE_NAMES) {
-      const puzzle = pictureLogic.generate({ picture });
+      const puzzle = pictureLogic.generate({ kind: 'drawn' as const, picture });
       expect(puzzle.solution.length).toBe(puzzle.rows * puzzle.cols);
       expect(puzzle.solution.some(Boolean)).toBe(true);
     }
   });
 
   it('falls back rather than throwing on a picture that is not there', () => {
-    expect(() => pictureLogic.generate({ picture: 'nope' })).not.toThrow();
+    expect(() => pictureLogic.generate({ kind: 'drawn' as const, picture: 'nope' })).not.toThrow();
   });
 });
 
@@ -145,7 +145,7 @@ describe('playing', () => {
     const session = open();
     solveIt(session);
     const data = session.serialise();
-    const reopened = Session.create(pictureLogic, { picture: 'heart' }, data);
+    const reopened = Session.create(pictureLogic, { kind: 'drawn' as const, picture: 'heart' }, data);
     expect(reopened.serialise()).toBe(data);
     expect(reopened.solved).toBe(true);
   });
@@ -243,12 +243,16 @@ describe('undo', () => {
 
 describe('the solver', () => {
   /**
-   * A stub returning `{ solved: false, steps: [] }` would be indistinguishable from a real
-   * solver that found nothing, and M2's difficulty rating and hints would be built on top
-   * of it without anybody noticing.
+   * M1 made this throw, so that a stub could not be mistaken for a solver that found
+   * nothing. M2 replaced it. The test is kept, inverted, as the record that the stub is
+   * gone rather than quietly returning an empty report again.
    */
-  it('says plainly that it does not exist yet', () => {
-    const session = open();
-    expect(() => pictureLogic.solve(puzzleOf(session), { marks: [] }, 99)).toThrow(/M2/);
+  it('exists now, and solves the hand-drawn pictures', () => {
+    for (const picture of PICTURE_NAMES) {
+      const puzzle = pictureLogic.generate({ kind: 'drawn' as const, picture });
+      const report = pictureLogic.solve(puzzle, pictureLogic.start(puzzle), 3);
+      expect(report.solved).toBe(true);
+      expect(report.steps.length).toBeGreaterThan(0);
+    }
   });
 });

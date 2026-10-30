@@ -30,17 +30,67 @@ import type {
   SolveReport,
   Tier,
 } from '../../core/types.js';
+import {
+  BLANK,
+  FILLED,
+  UNKNOWN,
+  solveGrid,
+  type Grid,
+  type LineCell,
+} from './solver.js';
+import { makePuzzle, tierName, tierRank } from './generate.js';
 
-/** What identifies an instance. Small enough for a game code. */
-export interface PictureSpec {
-  /** Which hand-drawn picture, until M2 generates them. */
-  readonly picture: string;
+/**
+ * What identifies an instance. Small enough for a game code.
+ *
+ * Two kinds, because they answer different needs. A **drawn** picture is one of the
+ * hand-made starters — recognisable at five cells across, which no generator manages and
+ * which is what a five-year-old meeting their first nonogram should get. A **made** one is
+ * generated from a seed at a chosen size and difficulty, and is the puzzle the app is
+ * actually for.
+ */
+export type PictureSpec =
+  | { readonly kind: 'drawn'; readonly picture: string }
+  | {
+      readonly kind: 'made';
+      readonly rows: number;
+      readonly cols: number;
+      /** A tier id: 'gentle' | 'steady' | 'tricky'. */
+      readonly tier: string;
+      readonly seed: string;
+    };
+
+/**
+ * Make sense of a spec from storage, a URL or an older version.
+ *
+ * Specs genuinely arrive untrusted — out of IndexedDB, off the end of a link somebody
+ * pasted — so this takes `unknown` rather than pretending otherwise. It also accepts the
+ * M1 shape `{ picture }`, so a puzzle saved before generation existed still opens instead
+ * of greeting its owner with an error.
+ */
+export function normaliseSpec(raw: unknown): PictureSpec {
+  const spec = (raw ?? {}) as Record<string, unknown>;
+  if (spec['kind'] === 'made' || typeof spec['seed'] === 'string') {
+    const rows = Number(spec['rows']);
+    const cols = Number(spec['cols']);
+    return {
+      kind: 'made',
+      rows: Number.isFinite(rows) && rows >= 3 ? Math.min(40, Math.round(rows)) : 10,
+      cols: Number.isFinite(cols) && cols >= 3 ? Math.min(40, Math.round(cols)) : 10,
+      tier: typeof spec['tier'] === 'string' ? spec['tier'] : 'steady',
+      seed: String(spec['seed'] ?? '1'),
+    };
+  }
+  const picture = String(spec['picture'] ?? 'heart');
+  return { kind: 'drawn', picture: picture in PICTURES ? picture : 'heart' };
 }
 
 export interface PicturePuzzle {
   readonly rows: number;
   readonly cols: number;
   readonly title: string;
+  /** The hardest tier the solver needed. What the player is told, not what was asked for. */
+  readonly tierUsed: number;
   /** The answer, row-major. True means filled. */
   readonly solution: readonly boolean[];
   /** Run lengths per row, top to bottom. An empty line is `[0]`, never `[]`. */
@@ -141,14 +191,41 @@ export const pictureLogic: PuzzleModule<
   tiers: TIERS,
 
   tools: [
-    { id: 'fill', name: 'Fill' },
+    {
+      id: 'fill',
+      name: 'Fill',
+      help: 'Colour a square in. Press it again to clear it, or drag to do a whole run.',
+    },
     // Marking a cell as definitely empty is not decoration: it is how the deductions are
     // actually made, and a player with no way to record "not this one" is solving a
     // harder puzzle than the one in front of them.
-    { id: 'cross', name: 'Cross out' },
+    {
+      id: 'cross',
+      name: 'Cross out',
+      help: 'Mark a square you are sure is empty. This is how you work the rest out, not decoration.',
+    },
   ],
 
-  generate(spec) {
+  generate(raw) {
+    const spec = normaliseSpec(raw);
+    if (spec.kind === 'made') {
+      const made = makePuzzle({
+        rows: spec.rows,
+        cols: spec.cols,
+        tier: tierRank(spec.tier),
+        seed: spec.seed,
+      });
+      return {
+        rows: spec.rows,
+        cols: spec.cols,
+        title: `${spec.cols}\u00d7${spec.rows} ${tierName(made.tierUsed)}`,
+        tierUsed: made.tierUsed,
+        solution: made.solution,
+        rowClues: made.rowClues,
+        colClues: made.colClues,
+      };
+    }
+
     const picture = PICTURES[spec.picture] ?? PICTURES['heart']!;
     const art = picture.art;
     const rows = art.length;
@@ -173,7 +250,19 @@ export const pictureLogic: PuzzleModule<
       colClues.push(cluesFor(line));
     }
 
-    return { rows, cols, title: picture.title, solution, rowClues, colClues };
+    // Rated rather than assumed: a hand-drawn picture is whatever difficulty it turns out
+    // to be, and saying "Gentle" because it is small would be a guess.
+    const rated = solveGrid({ rows, cols, rowClues, colClues }, new Array(rows * cols).fill(UNKNOWN), 3);
+
+    return {
+      rows,
+      cols,
+      title: picture.title,
+      tierUsed: rated.solved ? rated.tierUsed : 3,
+      solution,
+      rowClues,
+      colClues,
+    };
   },
 
   start(puzzle) {
@@ -191,16 +280,24 @@ export const pictureLogic: PuzzleModule<
   },
 
   /**
-   * Not implemented, and saying so rather than returning something plausible.
+   * Solve from wherever the player is, not from blank.
    *
-   * A stub that returned `{ solved: false, steps: [] }` would be indistinguishable from a
-   * real solver that found nothing, and M2's difficulty rating and hints would be built on
-   * top of it without anybody noticing. Throwing is the honest failure.
+   * That is what makes the same function serve a hint: the first step of a solve begun at
+   * the player's own board is the next deduction available *to them*. A solver that only
+   * worked from an empty grid could rate difficulty and nothing else.
+   *
+   * A player's crossed-out square is treated as known-empty. That is a small act of faith
+   * — a child who crosses the wrong square gets a hint derived from their mistake — but
+   * the alternative, ignoring their marks, would give hints about squares they had already
+   * ruled out and read as the app not watching.
    */
-  solve(): SolveReport {
-    throw new Error(
-      'Picture Logic has no solver yet — it arrives in M2, and generation and hints both depend on it.',
-    );
+  solve(puzzle, from, maxTier) {
+    const report = solveGrid(gridOf(puzzle), toLineCells(from), maxTier);
+    return {
+      solved: report.solved,
+      steps: report.steps,
+      tierUsed: report.tierUsed,
+    } satisfies SolveReport;
   },
 
   isSolved(puzzle, state) {
@@ -328,4 +425,20 @@ function lineDone(
   const want = axis === 'row' ? puzzle.rowClues[index]! : puzzle.colClues[index]!;
   const have = cluesFor(line);
   return have.length === want.length && have.every((v, i) => v === want[i]);
+}
+
+
+/** The clue grid the solver works on. Derived, never stored. */
+export function gridOf(puzzle: PicturePuzzle): Grid {
+  return {
+    rows: puzzle.rows,
+    cols: puzzle.cols,
+    rowClues: puzzle.rowClues,
+    colClues: puzzle.colClues,
+  };
+}
+
+/** A player's marks as the solver sees them: crossed and never-touched are different. */
+function toLineCells(state: PictureState): LineCell[] {
+  return state.marks.map((m) => (m === 'filled' ? FILLED : m === 'crossed' ? BLANK : UNKNOWN));
 }

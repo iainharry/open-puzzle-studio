@@ -137,8 +137,18 @@ export interface PuzzleModule<Spec, Puzzle, Move, State> {
   /** What a press on this cell means, given the tool in hand. Null for "nothing". */
   hit(puzzle: Puzzle, state: State, at: Cell, tool: string): Move | null;
 
-  /** The tools this puzzle offers, in toolbar order. The first is the default. */
-  readonly tools: readonly { readonly id: string; readonly name: string }[];
+  /**
+   * The tools this puzzle offers, in toolbar order. The first is the default.
+   *
+   * `help` is written by the puzzle, not by the shell. The shell has no business knowing
+   * what crossing a square out means, and a control whose explanation lives somewhere
+   * else is a control whose explanation goes stale.
+   */
+  readonly tools: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly help: string;
+  }[];
 
   /**
    * State only. The puzzle itself is regenerated from the spec, so a save file is a few

@@ -24,7 +24,13 @@ import {
   type PuzzleRecord,
 } from '../core/storage.js';
 import { DARK, LIGHT, cellAt, drawScene, type Layout, type Theme } from '../render/scene.js';
-import { PICTURE_NAMES, pictureLogic, type PictureSpec } from '../puzzles/pictureLogic/index.js';
+import {
+  PICTURE_NAMES,
+  normaliseSpec,
+  pictureLogic,
+  type PictureSpec,
+} from '../puzzles/pictureLogic/index.js';
+import { tierName } from '../puzzles/pictureLogic/generate.js';
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'development build';
@@ -42,9 +48,13 @@ export class App {
     redo: HTMLButtonElement;
     tools: HTMLElement;
     picker: HTMLSelectElement;
+    size: HTMLSelectElement;
+    tier: HTMLSelectElement;
     code: HTMLInputElement;
     library: HTMLElement;
     libList: HTMLElement;
+    help: HTMLElement;
+    helpNote: HTMLElement;
   };
 
   private session: Session | null = null;
@@ -64,31 +74,62 @@ export class App {
       <div class="ops">
         <header class="bar">
           <strong class="brand">Open Puzzle Studio</strong>
-          <label class="field">Picture
+          <label class="field" title="How big the picture is. Bigger takes longer and gives more to go on.">Size
+            <select class="size"></select>
+          </label>
+          <label class="field" title="How much working out it takes. Gentle puzzles never need more than looking at one line at a time.">Difficulty
+            <select class="tier"></select>
+          </label>
+          <button class="btn" data-act="new" title="Make a new picture at the size and difficulty chosen here">New puzzle</button>
+          <button class="btn" data-act="daily" title="The same puzzle for everyone today, with no account and nothing uploaded">Today&rsquo;s</button>
+          <label class="field" title="One of the small hand-drawn pictures, for a first go">Starter
             <select class="picker"></select>
           </label>
-          <button class="btn" data-act="new">New puzzle</button>
-          <button class="btn" data-act="daily" title="The same puzzle for everyone today">Today's</button>
           <span class="divider"></span>
           <span class="tools"></span>
           <span class="divider"></span>
-          <button class="btn" data-act="undo" disabled>Undo</button>
-          <button class="btn" data-act="redo" disabled>Redo</button>
+          <button class="btn" data-act="undo" title="Take back the last thing you did (Ctrl+Z)" disabled>Undo</button>
+          <button class="btn" data-act="redo" title="Put it back (Ctrl+Y)" disabled>Redo</button>
           <span class="divider"></span>
-          <button class="btn" data-act="library">My puzzles</button>
-          <label class="field">Code
-            <input class="code" type="text" readonly size="24" />
+          <button class="btn" data-act="help" title="How to play">How to play</button>
+          <button class="btn" data-act="library" title="Every puzzle you have started is saved here">My puzzles</button>
+          <label class="field" title="This puzzle, as text. Anyone who types it in gets exactly this picture.">Code
+            <input class="code" type="text" readonly size="32" title="Copy this to share the puzzle" />
           </label>
-          <button class="btn" data-act="theme">Light</button>
+          <button class="btn" data-act="theme" title="Switch between the dark and light board">Light</button>
         </header>
         <main class="stage"><canvas class="board"></canvas></main>
-        <footer class="foot"><span class="status">Loading…</span><span class="version"></span></footer>
+        <footer class="foot"><span class="status">Loading&hellip;</span><span class="version"></span></footer>
         <div class="library" hidden>
           <div class="lib-panel">
             <div class="lib-head"><strong>My puzzles</strong>
               <button class="btn" data-act="close-library">Close</button>
             </div>
             <div class="lib-list"></div>
+          </div>
+        </div>
+        <div class="help" hidden>
+          <div class="lib-panel">
+            <div class="lib-head"><strong>How to play</strong>
+              <button class="btn" data-act="close-help">Close</button>
+            </div>
+            <div class="help-body">
+              <p>The numbers tell you how many squares in a row are filled in, in order.
+              A row marked <b>3 1</b> has a block of three, then at least one gap, then a
+              single square. Fill in the right squares and a picture appears.</p>
+              <ul>
+                <li><b>Fill</b> colours a square in. Press it again to clear it.</li>
+                <li><b>Cross out</b> marks a square you are sure is <em>empty</em>. This is
+                not decoration &mdash; crossing out is how you work the rest out, and
+                without it you are solving a harder puzzle than the one in front of you.</li>
+                <li><b>Drag</b> across several squares to do a whole run at once.</li>
+                <li>Press <b>space</b> to swap between Fill and Cross out.</li>
+                <li>A clue goes faint when that line is finished.</li>
+              </ul>
+              <p>Every puzzle here can be worked out by reasoning. There is never a need to
+              guess.</p>
+              <p class="help-note"></p>
+            </div>
           </div>
         </div>
       </div>`;
@@ -101,9 +142,13 @@ export class App {
       redo: q<HTMLButtonElement>('[data-act="redo"]'),
       tools: q('.tools'),
       picker: q<HTMLSelectElement>('.picker'),
+      size: q<HTMLSelectElement>('.size'),
+      tier: q<HTMLSelectElement>('.tier'),
       code: q<HTMLInputElement>('.code'),
       library: q('.library'),
       libList: q('.lib-list'),
+      help: q('.help'),
+      helpNote: q('.help-note'),
     };
     q<HTMLElement>('.version').textContent = APP_VERSION;
 
@@ -113,6 +158,23 @@ export class App {
       option.textContent = name[0]!.toUpperCase() + name.slice(1);
       this.els.picker.append(option);
     }
+    // Sizes a person would actually choose, not every number. 5x5 is a first go; 20x20 is
+    // an evening. The upper end is capped by how long generation takes to find a puzzle
+    // the solver can finish, which the tests measure rather than assume.
+    for (const n of [5, 8, 10, 12, 15, 20]) {
+      const option = document.createElement('option');
+      option.value = String(n);
+      option.textContent = `${n} \u00d7 ${n}`;
+      this.els.size.append(option);
+    }
+    this.els.size.value = '10';
+    for (const tier of pictureLogic.tiers) {
+      const option = document.createElement('option');
+      option.value = tier.id;
+      option.textContent = tier.name;
+      this.els.tier.append(option);
+    }
+    this.els.tier.value = 'steady';
 
     this.wire();
     void this.start();
@@ -122,17 +184,23 @@ export class App {
   private wire(): void {
     this.root.addEventListener('click', (e) => {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset['act'];
-      if (act === 'new') void this.newPuzzle({ picture: this.els.picker.value });
+      if (act === 'new') void this.newPuzzle(this.chosenSpec());
       else if (act === 'daily') void this.openDaily();
       else if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
       else if (act === 'library') void this.openLibrary();
       else if (act === 'close-library') this.els.library.hidden = true;
+      else if (act === 'help') this.els.help.hidden = false;
+      else if (act === 'close-help') this.els.help.hidden = true;
       else if (act === 'theme') this.toggleTheme();
       else if (act === 'tool') {
         this.tool = (e.target as HTMLElement).dataset['tool'] ?? 'fill';
         this.syncTools();
       }
+    });
+
+    this.els.picker.addEventListener('change', () => {
+      void this.newPuzzle({ kind: 'drawn', picture: this.els.picker.value });
     });
 
     window.addEventListener('keydown', (e) => {
@@ -222,17 +290,53 @@ export class App {
       button.dataset['act'] = 'tool';
       button.dataset['tool'] = tool.id;
       button.textContent = tool.name;
+      button.title = tool.help;
       button.setAttribute('aria-pressed', String(this.tool === tool.id));
       this.els.tools.append(button);
     }
+  }
+
+  /** The spec the toolbar is currently describing. */
+  private chosenSpec(): PictureSpec {
+    const n = Number(this.els.size.value);
+    return {
+      kind: 'made',
+      rows: n,
+      cols: n,
+      tier: this.els.tier.value,
+      // A fresh seed each press, so "New puzzle" means a new puzzle rather than the same
+      // one again. Short on purpose: the whole code has to be writable on a whiteboard,
+      // and a timestamp-plus-random seed made it longer than the field it sits in. Four
+      // base-36 characters is 1.7 million puzzles per size and difficulty, which is more
+      // than a classroom will exhaust.
+      seed: Math.floor(Math.random() * 1_679_616).toString(36).padStart(4, '0'),
+    };
+  }
+
+  /** A spec as a short piece of text, and back. */
+  private static codeFor(spec: PictureSpec): string {
+    return spec.kind === 'drawn'
+      ? encodeGameId(pictureLogic.id, ['d', spec.picture])
+      : encodeGameId(pictureLogic.id, ['m', `${spec.cols}x${spec.rows}`, spec.tier, spec.seed]);
+  }
+
+  private static specFromCode(parts: readonly string[]): PictureSpec | null {
+    if (parts[0] === 'd' && parts[1]) return { kind: 'drawn', picture: parts[1] };
+    if (parts[0] === 'm' && parts[1] && parts[2] && parts[3]) {
+      const [cols, rows] = parts[1].split('x').map(Number);
+      if (!cols || !rows) return null;
+      return { kind: 'made', rows, cols, tier: parts[2], seed: parts[3] };
+    }
+    return null;
   }
 
   private async start(): Promise<void> {
     const fromUrl = location.hash.replace(/^#/, '');
     if (fromUrl) {
       const decoded = decodeGameId(fromUrl);
-      if (decoded && MODULES[decoded.puzzleId] && decoded.parts[0]) {
-        await this.newPuzzle({ picture: decoded.parts[0] });
+      const spec = decoded && MODULES[decoded.puzzleId] ? App.specFromCode(decoded.parts) : null;
+      if (spec) {
+        await this.newPuzzle(spec);
         return;
       }
       this.setStatus('That code is not one this app recognises, so a new puzzle was opened instead.');
@@ -245,10 +349,24 @@ export class App {
         return;
       }
     }
-    await this.newPuzzle({ picture: 'heart' });
+    await this.newPuzzle({ kind: 'drawn', picture: 'heart' });
   }
 
   private async newPuzzle(spec: PictureSpec): Promise<void> {
+    /**
+     * Say something before the search, because the search is not instant.
+     *
+     * Generation is a search, and measured on a desktop it ranges from under a
+     * millisecond for a gentle 10x10 to about 775ms for a tricky 20x20 — which on a
+     * tablet is comfortably long enough to look like the app has died. One frame is
+     * yielded so the message actually paints before the main thread is taken.
+     *
+     * This is a courtesy, not a fix: the thread is still blocked while it runs. The fix
+     * is a worker, and it is recorded as a known limitation rather than pretended away.
+     */
+    this.setStatus('Making a picture\u2026');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
     const module = pictureLogic;
     const session = Session.create(module, spec, undefined, { onChange: () => (this.dirty = true) });
     const record: PuzzleRecord = {
@@ -267,14 +385,23 @@ export class App {
     await this.save();
   }
 
+  /**
+   * Today's puzzle, with no server behind it.
+   *
+   * The date *is* the seed, so every device generates the same picture from the same
+   * arithmetic. No backend, no sync, nothing to go down — and it still works on a tablet
+   * in a classroom with the wifi off.
+   */
   private async openDaily(): Promise<void> {
-    // With three hand-drawn pictures a "daily" is a rotation, not a generated puzzle. It
-    // exists now so the game-code and date-seeding path is exercised from M1 rather than
-    // bolted on once there is a real generator.
     const seed = dailySeed();
-    const picture = PICTURE_NAMES[Number(seed) % PICTURE_NAMES.length]!;
-    await this.newPuzzle({ picture });
-    this.setStatus(`Today's puzzle (${seed}). Everyone gets the same one.`);
+    await this.newPuzzle({
+      kind: 'made',
+      rows: Number(this.els.size.value),
+      cols: Number(this.els.size.value),
+      tier: this.els.tier.value,
+      seed,
+    });
+    this.setStatus(`Today's puzzle. Everyone who picks this size and difficulty gets the same one.`);
   }
 
   private openRecord(record: PuzzleRecord): void {
@@ -294,12 +421,18 @@ export class App {
     this.record = record;
     this.tool = session.module.tools[0]?.id ?? 'fill';
     setLastOpened(record.id);
-    this.els.code.value = encodeGameId(session.module.id, [
-      (record.spec as PictureSpec).picture,
-    ]);
+    this.els.code.value = App.codeFor(normaliseSpec(record.spec));
     this.syncTools();
     this.syncHistory();
     this.updateStatus();
+    const puzzle = session.puzzle as { rows: number; cols: number; tierUsed: number };
+    this.els.helpNote.textContent =
+      `This one is ${puzzle.cols} by ${puzzle.rows}, and rated ${tierName(puzzle.tierUsed)} — ` +
+      (puzzle.tierUsed <= 1
+        ? 'every step can be found by looking at one line at a time.'
+        : puzzle.tierUsed === 2
+          ? 'some steps need you to think about all the ways a line could fit.'
+          : 'a few steps need you to suppose a square is filled and see what goes wrong.');
     this.dirty = true;
   }
 
@@ -342,11 +475,15 @@ export class App {
 
   private updateStatus(): void {
     if (!this.session) return;
+    // The difficulty the solver actually needed, not the one asked for. A 10x10 asked for
+    // at Tricky that turned out to be Steady is a Steady puzzle, and saying otherwise
+    // would be the app flattering itself.
+    const rated = tierName((this.session.puzzle as { tierUsed: number }).tierUsed);
     if (this.session.solved) {
       this.setStatus(`Finished — ${this.record?.title ?? 'the picture'} is complete.`);
       return;
     }
-    this.setStatus(`${Math.round(this.session.progress * 100)}% of the picture filled in`);
+    this.setStatus(`${rated} · ${Math.round(this.session.progress * 100)}% of the picture filled in`);
   }
 
   private setStatus(text: string): void {
