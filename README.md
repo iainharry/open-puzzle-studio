@@ -6,13 +6,14 @@ Sister project to [Open Jigsaw Studio](https://github.com/iainharry/open-jigsaw-
 and built on the parts of it that turned out to be about *playing a puzzle* rather than
 about jigsaws.
 
-**Status: M3.** Generated puzzles at three real difficulties, solvable by reasoning, with
-a shareable code and a daily puzzle that needs no server. Hints come in three strengths —
-where to look, why, then do it — and a board that has gone wrong is reported as wrong
-rather than deduced from.
+**Status: M4.** Generated puzzles at three real difficulties, solvable by reasoning, with
+a shareable code and a daily puzzle that needs no server. Hints in three strengths — where
+to look, why, then do it — and a board that has gone wrong is reported as wrong rather
+than deduced from. A **demonstration** in which the app solves a small puzzle in front of
+you, a step at a time. Printing to A4. A finish worth noticing.
 
-Still to come: printing, a generated guide, assistance levels and the celebration (M4),
-then a second puzzle type.
+Still to come: pictures made from your own images, and a second puzzle type — both
+after somebody has been watched playing this one.
 
 ## Why this exists when Simon Tatham's collection already does
 

@@ -1,5 +1,6 @@
 import './shell/style.css';
 import { App } from './shell/app.js';
+import { sheetHtml } from './shell/sheet.js';
 
 const root = document.getElementById('app');
 if (!root) throw new Error('#app is missing from index.html');
@@ -9,6 +10,10 @@ const app = new App(root);
 // not a public API, and the reason the smoke test can assert what a player would see
 // instead of asking the app whether it thinks it worked.
 (globalThis as unknown as { __ops?: App }).__ops = app;
+
+// Exposed for the same reason as `__ops`: the smoke test reads what the printed sheet
+// actually contains rather than asking the app whether it printed one.
+(globalThis as unknown as { __opsSheet?: typeof sheetHtml }).__opsSheet = sheetHtml;
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {

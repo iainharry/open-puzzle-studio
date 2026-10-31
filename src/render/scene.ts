@@ -215,3 +215,40 @@ export function drawScene(
 
   return layout;
 }
+
+
+/**
+ * A pointer on a square, drawn after the scene.
+ *
+ * The one thing a clip of a person shows that an app playing itself does not: a hand. It
+ * is drawn here rather than put in the `Scene` because it belongs to the demonstration
+ * and not to the puzzle — a `Scene` describes a board, and no puzzle module should have
+ * to know that a demo exists.
+ */
+export function drawPointer(
+  canvas: HTMLCanvasElement,
+  layout: Layout,
+  at: Cell,
+  theme: Theme,
+): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const { cell, originX, originY } = layout;
+  const x = originX + (at.col + 0.5) * cell;
+  const y = originY + (at.row + 0.5) * cell;
+  const r = Math.max(7, cell * 0.3);
+
+  ctx.save();
+  // A ring rather than a filled blob, so the square underneath stays readable — the point
+  // is to show what is being marked, not to cover it up.
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = theme.highlight;
+  ctx.globalAlpha = 0.28;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = Math.max(2, cell * 0.07);
+  ctx.strokeStyle = theme.highlight;
+  ctx.stroke();
+  ctx.restore();
+}

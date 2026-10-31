@@ -439,6 +439,22 @@ export const pictureLogic: PuzzleModule<
     return state.marks.map((m) => (m === 'filled' ? '#' : m === 'crossed' ? 'x' : '.')).join('');
   },
 
+  /**
+   * The puzzle on paper: the clues and an empty grid, and **never the answer**.
+   *
+   * The sister project shipped a printable sheet that drew every piece into the frame and
+   * passed four assertions, because each one checked that something had been drawn rather
+   * than what it showed. The equivalent mistake here is passing `state` instead of a blank
+   * board, so this takes no state at all — the function signature makes the bug
+   * unavailable rather than merely untaken.
+   *
+   * Printing matters more here than it did there: a nonogram on paper is how most
+   * children will meet one in a classroom, and a grid with clues is the whole artefact.
+   */
+  printable(puzzle) {
+    return pictureLogic.layout(puzzle, pictureLogic.start(puzzle));
+  },
+
   deserialise(puzzle, data) {
     const size = puzzle.rows * puzzle.cols;
     const marks: Mark[] = [];

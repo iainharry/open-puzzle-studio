@@ -12,6 +12,7 @@ import {
   decodeGameId,
   encodeGameId,
   type AnyPuzzleModule,
+  type Cell,
 } from '../core/index.js';
 import {
   deletePuzzle,
@@ -23,7 +24,15 @@ import {
   setLastOpened,
   type PuzzleRecord,
 } from '../core/storage.js';
-import { DARK, LIGHT, cellAt, drawScene, type Layout, type Theme } from '../render/scene.js';
+import {
+  DARK,
+  LIGHT,
+  cellAt,
+  drawPointer,
+  drawScene,
+  type Layout,
+  type Theme,
+} from '../render/scene.js';
 import {
   PICTURE_NAMES,
   normaliseSpec,
@@ -31,6 +40,15 @@ import {
   type PictureSpec,
 } from '../puzzles/pictureLogic/index.js';
 import { tierName } from '../puzzles/pictureLogic/generate.js';
+import { TIMING, buildScript, type Beat } from './demo.js';
+import { sheetHtml } from './sheet.js';
+import {
+  celebrationBuzz,
+  celebrationPlan,
+  playFanfare,
+  runCelebration,
+  type CelebrationLevel,
+} from './celebrate.js';
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'development build';
@@ -56,6 +74,14 @@ export class App {
     help: HTMLElement;
     helpNote: HTMLElement;
     hint: HTMLButtonElement;
+    setCelebrate: HTMLSelectElement;
+    celebrateCanvas: HTMLCanvasElement;
+    finishBanner: HTMLElement;
+    finishDetail: HTMLElement;
+    demoBar: HTMLElement;
+    demoStep: HTMLElement;
+    demoCaption: HTMLElement;
+    demoPause: HTMLButtonElement;
   };
 
   private session: Session | null = null;
@@ -74,6 +100,18 @@ export class App {
   private hintCells: readonly { col: number; row: number }[] = [];
   /** Counted, so a finish that leaned on help is recorded as one. */
   private hintsUsed = 0;
+  /** Non-null while the demonstration is running. */
+  private demo: {
+    beats: Beat[];
+    at: number;
+    paused: boolean;
+    cancelled: boolean;
+    pointer: Cell | null;
+    returnTo: PuzzleRecord | null;
+  } | null = null;
+  private celebration: CelebrationLevel = 'full';
+  private stopCelebration: (() => void) | null = null;
+  private celebrateTimer = 0;
   private dirty = true;
   private saveTimer: number | null = null;
   /** Read by the smoke test. See `Session.unguardedChanges`. */
@@ -104,14 +142,29 @@ export class App {
           <button class="btn" data-act="redo" title="Put it back (Ctrl+Y)" disabled>Redo</button>
           <span class="divider"></span>
           <button class="btn hint-btn" data-act="hint" title="Ask for help. Press once for where to look, again for why, again to have it done.">Hint</button>
-          <button class="btn" data-act="help" title="How to play">How to play</button>
+          <button class="btn" data-act="help" title="How to play, and a demonstration to watch">How to play</button>
+          <button class="btn" data-act="print" title="Print this puzzle on paper, with the numbers and an empty grid">Print</button>
           <button class="btn" data-act="library" title="Every puzzle you have started is saved here">My puzzles</button>
           <label class="field" title="This puzzle, as text. Anyone who types it in gets exactly this picture.">Code
             <input class="code" type="text" readonly size="32" title="Copy this to share the puzzle" />
           </label>
           <button class="btn" data-act="theme" title="Switch between the dark and light board">Light</button>
         </header>
-        <main class="stage"><canvas class="board"></canvas></main>
+        <main class="stage">
+          <canvas class="board"></canvas>
+          <canvas class="celebrate" aria-hidden="true" hidden></canvas>
+          <div class="finish-banner" role="status" hidden>
+            <strong class="finish-head">Finished!</strong>
+            <span class="finish-detail"></span>
+            <button class="btn finish-close" type="button" aria-label="Close">Close</button>
+          </div>
+          <div class="demo-bar" hidden>
+            <span class="demo-step"></span>
+            <span class="demo-caption"></span>
+            <button class="btn" data-act="demo-pause">Pause</button>
+            <button class="btn" data-act="demo-close">Stop</button>
+          </div>
+        </main>
         <footer class="foot"><span class="status">Loading&hellip;</span><span class="version"></span></footer>
         <div class="library" hidden>
           <div class="lib-panel">
@@ -142,6 +195,12 @@ export class App {
               <p>Every puzzle here can be worked out by reasoning. There is never a need to
               guess.</p>
               <p class="help-note"></p>
+              <div class="ch-actions">
+                <button class="btn on" data-act="demo" title="Watch the app solve a small one, a step at a time">Show me &mdash; watch a puzzle being solved</button>
+              </div>
+              <label class="set-row" title="What happens when a puzzle is finished">Finishing
+                <select class="set-celebrate"></select>
+              </label>
             </div>
           </div>
         </div>
@@ -163,6 +222,14 @@ export class App {
       help: q('.help'),
       helpNote: q('.help-note'),
       hint: q<HTMLButtonElement>('.hint-btn'),
+      setCelebrate: q<HTMLSelectElement>('.set-celebrate'),
+      celebrateCanvas: q<HTMLCanvasElement>('.celebrate'),
+      finishBanner: q('.finish-banner'),
+      finishDetail: q('.finish-detail'),
+      demoBar: q('.demo-bar'),
+      demoStep: q('.demo-step'),
+      demoCaption: q('.demo-caption'),
+      demoPause: q<HTMLButtonElement>('[data-act="demo-pause"]'),
     };
     q<HTMLElement>('.version').textContent = APP_VERSION;
 
@@ -175,7 +242,9 @@ export class App {
     // Sizes a person would actually choose, not every number. 5x5 is a first go; 20x20 is
     // an evening. The upper end is capped by how long generation takes to find a puzzle
     // the solver can finish, which the tests measure rather than assume.
-    for (const n of [5, 8, 10, 12, 15, 20]) {
+    // 7x7 is here because it was asked for, and because the gap between 5 and 8 is the
+    // gap between "a first go" and "a real puzzle" for the children this is aimed at.
+    for (const n of [5, 7, 8, 10, 12, 15, 20]) {
       const option = document.createElement('option');
       option.value = String(n);
       option.textContent = `${n} \u00d7 ${n}`;
@@ -205,6 +274,10 @@ export class App {
       else if (act === 'library') void this.openLibrary();
       else if (act === 'close-library') this.els.library.hidden = true;
       else if (act === 'hint') this.askHint();
+      else if (act === 'print') this.printSheet();
+      else if (act === 'demo') void this.startDemo();
+      else if (act === 'demo-pause') this.toggleDemoPause();
+      else if (act === 'demo-close') this.stopDemo();
       else if (act === 'help') this.els.help.hidden = false;
       else if (act === 'close-help') this.els.help.hidden = true;
       else if (act === 'theme') this.toggleTheme();
@@ -212,6 +285,41 @@ export class App {
         this.tool = (e.target as HTMLElement).dataset['tool'] ?? 'fill';
         this.syncTools();
       }
+    });
+
+    for (const choice of [
+      { value: 'full', label: 'Squares and a sound' },
+      { value: 'quiet', label: 'Squares, no sound' },
+      { value: 'off', label: 'Nothing' },
+    ]) {
+      const option = document.createElement('option');
+      option.value = choice.value;
+      option.textContent = choice.label;
+      this.els.setCelebrate.append(option);
+    }
+    this.els.setCelebrate.value = this.celebration;
+    this.els.setCelebrate.addEventListener('change', () => {
+      this.celebration = this.els.setCelebrate.value as CelebrationLevel;
+      try {
+        localStorage.setItem('ops:celebrate', this.celebration);
+      } catch {
+        /* storage disabled; it simply starts at full next time */
+      }
+      // Shown rather than described: nobody can picture "squares and a sound" from a
+      // dropdown, and the alternative is finishing a puzzle to find out.
+      if (this.celebration !== 'off') this.celebrate('A taste of it.');
+    });
+    try {
+      const saved = localStorage.getItem('ops:celebrate');
+      if (saved === 'off' || saved === 'quiet' || saved === 'full') {
+        this.celebration = saved;
+        this.els.setCelebrate.value = saved;
+      }
+    } catch {
+      /* storage disabled */
+    }
+    this.els.finishBanner.querySelector('.finish-close')?.addEventListener('click', () => {
+      this.hideCelebration();
     });
 
     this.els.picker.addEventListener('change', () => {
@@ -264,6 +372,8 @@ export class App {
 
     this.canvas.style.touchAction = 'none';
     this.canvas.addEventListener('pointerdown', (e) => {
+      // A demonstration you can interfere with ends up in a state nobody intended.
+      if (this.demo) return;
       const cell = toCell(e);
       if (!cell || !this.session) return;
       e.preventDefault();
@@ -435,6 +545,7 @@ export class App {
     this.session = session;
     this.record = record;
     this.clearHint();
+    this.hideCelebration();
     this.hintsUsed = record.hintsUsed ?? 0;
     this.tool = session.module.tools[0]?.id ?? 'fill';
     setLastOpened(record.id);
@@ -601,7 +712,17 @@ export class App {
     record.progress = session.progress;
     record.hintsUsed = this.hintsUsed;
     record.lastPlayed = Date.now();
-    if (session.solved && record.completedAt === null) record.completedAt = Date.now();
+    if (session.solved && record.completedAt === null) {
+      record.completedAt = Date.now();
+      // Here rather than in `updateStatus`, because this is the one place that knows the
+      // puzzle has *just* become complete. `updateStatus` runs on every change and would
+      // throw the squares into the air every time a finished board was touched.
+      const puzzle = session.puzzle as { rows: number; cols: number; tierUsed: number };
+      this.celebrate(
+        `${puzzle.cols} by ${puzzle.rows}, ${tierName(puzzle.tierUsed)}` +
+          (this.hintsUsed === 0 ? ', with no hints.' : `, with ${this.hintsUsed} hint${this.hintsUsed === 1 ? '' : 's'}.`),
+      );
+    }
     try {
       await putPuzzle(record);
     } catch (err) {
@@ -640,6 +761,183 @@ export class App {
     this.els.library.hidden = false;
   }
 
+
+  // --- Finishing -------------------------------------------------------------
+
+  /** See `celebrate.ts`. The flash-safety and reduced-motion rules came with it. */
+  private celebrate(detail: string | null): void {
+    const cells = (this.session?.puzzle as { rows: number; cols: number } | undefined) ?? {
+      rows: 10,
+      cols: 10,
+    };
+    const reduced =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const plan = celebrationPlan(cells.rows * cells.cols, this.celebration, reduced);
+    if (!plan) return;
+
+    this.stopCelebration?.();
+    this.els.finishDetail.textContent = detail ?? 'That is what finishing looks like.';
+    this.els.finishBanner.hidden = false;
+    if (plan.animate) {
+      this.els.celebrateCanvas.hidden = false;
+      this.stopCelebration = runCelebration(this.els.celebrateCanvas, plan);
+    }
+    if (plan.sound) playFanfare();
+    celebrationBuzz();
+    window.clearTimeout(this.celebrateTimer);
+    this.celebrateTimer = window.setTimeout(() => this.hideCelebration(), 8000);
+  }
+
+  private hideCelebration(): void {
+    window.clearTimeout(this.celebrateTimer);
+    this.stopCelebration?.();
+    this.stopCelebration = null;
+    this.els.celebrateCanvas.hidden = true;
+    this.els.finishBanner.hidden = true;
+  }
+
+  // --- Paper -----------------------------------------------------------------
+
+  /**
+   * The puzzle on A4, with the numbers and an empty grid.
+   *
+   * Printed from an iframe rather than a popup, for the reason the sister project
+   * recorded: a window is blocked often enough to be unreliable, and when it is blocked
+   * it fails silently.
+   */
+  private printSheet(): void {
+    const session = this.session;
+    if (!session) return;
+    const module = session.module;
+    if (!module.printable) {
+      this.setStatus('This puzzle cannot be printed.');
+      return;
+    }
+    const html = sheetHtml(
+      module.printable(session.puzzle),
+      (session.puzzle as { title: string }).title,
+      this.els.code.value,
+    );
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    if (!doc || !frame.contentWindow) {
+      frame.remove();
+      this.setStatus('This browser would not open a print view.');
+      return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 60_000);
+    this.setStatus('Sheet sent to your printer — the numbers and an empty grid, not the answer.');
+  }
+
+  // --- The demonstration -----------------------------------------------------
+
+  /**
+   * Show somebody what to do, by doing it.
+   *
+   * Runs on its own puzzle — a small hand-drawn one, always the same, so a teacher can
+   * talk about it — and puts the player's own puzzle back when it finishes. The board is
+   * deaf to the pointer while it runs: a demonstration you can interfere with is a
+   * demonstration that ends up in a state nobody intended.
+   */
+  private async startDemo(): Promise<void> {
+    this.els.help.hidden = true;
+    const previous = this.record;
+    const module = pictureLogic;
+    const spec: PictureSpec = { kind: 'drawn', picture: 'heart' };
+    const session = Session.create(module, spec, undefined, {
+      onChange: () => (this.dirty = true),
+    });
+    const { beats } = buildScript(module, session.puzzle);
+    if (beats.length === 0) {
+      this.setStatus('There is nothing to demonstrate on this puzzle.');
+      return;
+    }
+
+    this.demo = { beats, at: 0, paused: false, cancelled: false, pointer: null, returnTo: previous };
+    this.session = session;
+    this.record = null;
+    this.els.demoBar.hidden = false;
+    this.clearHint();
+    this.dirty = true;
+
+    for (let i = 0; i < beats.length; i++) {
+      const beat = beats[i]!;
+      if (!this.demo || this.demo.cancelled) break;
+      this.demo.at = i;
+      this.els.demoStep.textContent = `${i + 1} of ${beats.length}`;
+      this.els.demoCaption.textContent = beat.caption;
+      this.hintCells = beat.look;
+      this.demo.pointer = beat.cells[0] ?? null;
+      this.dirty = true;
+      if (!(await this.demoWait(TIMING.look))) break;
+
+      for (let m = 0; m < beat.moves.length; m++) {
+        if (!this.demo || this.demo.cancelled) break;
+        this.demo.pointer = beat.cells[m] ?? null;
+        session.play(beat.moves[m], 'the demonstration');
+        this.dirty = true;
+        if (!(await this.demoWait(TIMING.mark))) break;
+      }
+      this.hintCells = [];
+      if (!(await this.demoWait(TIMING.settle))) break;
+    }
+
+    if (this.demo && !this.demo.cancelled) {
+      this.els.demoStep.textContent = 'Done';
+      this.els.demoCaption.textContent =
+        'That is how it goes. Press Stop and try one yourself — and press Hint any time you get stuck.';
+      this.demo.pointer = null;
+      this.hintCells = [];
+      this.dirty = true;
+    }
+  }
+
+  /**
+   * Sleep, unless the demo is paused or has been stopped. Returns false if stopped.
+   *
+   * The demo is re-read **after** every await, not before. Pressing Stop sets it to null
+   * from another turn of the event loop, so a check made before the await says nothing
+   * about the world after it — which threw a TypeError on the first run of the smoke
+   * test's "nothing threw along the way" line. That assertion exists for faults with no
+   * visible symptom, and this was one: the demo had already stopped and looked fine.
+   */
+  private async demoWait(ms: number): Promise<boolean> {
+    const step = 60;
+    for (let waited = 0; waited < ms; ) {
+      await new Promise((resolve) => setTimeout(resolve, step));
+      const demo = this.demo;
+      if (!demo || demo.cancelled) return false;
+      if (!demo.paused) waited += step;
+    }
+    return true;
+  }
+
+  private toggleDemoPause(): void {
+    if (!this.demo) return;
+    this.demo.paused = !this.demo.paused;
+    this.els.demoPause.textContent = this.demo.paused ? 'Play' : 'Pause';
+  }
+
+  private stopDemo(): void {
+    const returnTo = this.demo?.returnTo ?? null;
+    if (this.demo) this.demo.cancelled = true;
+    this.demo = null;
+    this.els.demoBar.hidden = true;
+    this.els.demoPause.textContent = 'Pause';
+    this.hintCells = [];
+    if (returnTo) this.openRecord(returnTo);
+    else void this.newPuzzle({ kind: 'drawn', picture: 'heart' });
+  }
+
   private loop = (): void => {
     if (this.dirty && this.session) {
       // The highlight is composed here rather than passed into `layout()`.
@@ -651,6 +949,9 @@ export class App {
         this.hintCells.length > 0 ? { ...scene, highlight: this.hintCells } : scene,
         this.theme,
       );
+      if (this.demo?.pointer) {
+        drawPointer(this.canvas, this.layout, this.demo.pointer, this.theme);
+      }
       this.dirty = false;
       this.session.checkGuard();
     }

@@ -374,6 +374,96 @@ check('a wrong board is reported as wrong, not deduced from', /cannot be right/.
 check('and the wrong line is visibly marked, over the squares already filled', hints.accent === true, `pixel at the row edge was ${hints.pixel}`);
 check('and it names the line, not the square', new RegExp(`row ${hints.brokenRow}\\b`, 'i').test(hints.wrong.status) && !/square \d/.test(hints.wrong.status), hints.wrong.status.slice(0, 90));
 
+// 10. The demonstration. Asked for as "a video", built as the app playing itself — so the
+// check is that a child watching it sees the board change with captions, and that it puts
+// their own puzzle back afterwards.
+const demo = await page.evaluate(async () => {
+  const app = globalThis.__ops;
+  // Start from a known puzzle so "it came back" means something.
+  document.querySelector('.size').value = '10';
+  document.querySelector('[data-act="new"]').click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const mine = app.session.serialise();
+  const myCode = document.querySelector('.code').value;
+
+  document.querySelector('[data-act="help"]').click();
+  document.querySelector('[data-act="demo"]').click();
+  await new Promise((r) => setTimeout(r, 900));
+  const started = {
+    barShown: !document.querySelector('.demo-bar').hidden,
+    helpClosed: document.querySelector('.help').hidden,
+    step: document.querySelector('.demo-step').textContent,
+    caption: document.querySelector('.demo-caption').textContent,
+    board: app.session.serialise(),
+    lit: app.hintCells.length,
+  };
+
+  // The board is deaf while it runs.
+  const canvas = document.querySelector('.board');
+  const rect = canvas.getBoundingClientRect();
+  canvas.dispatchEvent(new PointerEvent('pointerdown', {
+    pointerId: 9, pointerType: 'mouse', isPrimary: true, bubbles: true,
+    clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, button: 0, buttons: 1,
+  }));
+  await new Promise((r) => setTimeout(r, 120));
+  const afterPoke = app.session.serialise();
+
+  // Let it run a few beats, then check it is actually marking squares.
+  await new Promise((r) => setTimeout(r, 6000));
+  const running = {
+    board: app.session.serialise(),
+    caption: document.querySelector('.demo-caption').textContent,
+    step: document.querySelector('.demo-step').textContent,
+  };
+
+  // Pause stops it.
+  document.querySelector('[data-act="demo-pause"]').click();
+  const pausedLabel = document.querySelector('[data-act="demo-pause"]').textContent;
+  const atPause = app.session.serialise();
+  await new Promise((r) => setTimeout(r, 2500));
+  const stillPaused = app.session.serialise();
+
+  document.querySelector('[data-act="demo-close"]').click();
+  await new Promise((r) => setTimeout(r, 1200));
+  const after = {
+    barHidden: document.querySelector('.demo-bar').hidden,
+    board: app.session.serialise(),
+    code: document.querySelector('.code').value,
+  };
+  return { mine, myCode, started, afterPoke, running, pausedLabel, atPause, stillPaused, after };
+});
+check('the demonstration starts and says what it is doing', demo.started.barShown && /1 of \d/.test(demo.started.step) && demo.started.caption.length > 20, `${demo.started.step}: ${demo.started.caption.slice(0, 60)}`);
+check('and closes How to play behind it', demo.started.helpClosed === true);
+check('and lights up the line it is talking about', demo.started.lit >= 5, `${demo.started.lit} squares lit`);
+// A demonstration you can interfere with ends up in a state nobody intended.
+check('the board ignores presses while it runs', demo.afterPoke === demo.started.board);
+check('it marks squares as it goes', demo.running.board !== demo.started.board, `${demo.running.board.replace(/\./g, '').length} squares marked by ${demo.running.step}`);
+check('and the caption keeps up with it', demo.running.caption !== demo.started.caption);
+check('pause actually pauses', demo.pausedLabel === 'Play' && demo.stillPaused === demo.atPause);
+// The player's own puzzle must come back, or watching a demo costs you your game.
+check('and stopping gives the player their own puzzle back', demo.after.barHidden && demo.after.board === demo.mine && demo.after.code === demo.myCode, `${demo.after.code}`);
+
+// 11. Printing. The sister project shipped a sheet that printed the answer, so this
+// counts what is in the sheet rather than that a sheet was produced.
+const sheet = await page.evaluate(() => {
+  const app = globalThis.__ops;
+  const module = app.session.module;
+  const html = globalThis.__opsSheet(module.printable(app.session.puzzle), 'Test', 'code-here');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const svg = doc.querySelector('svg');
+  return {
+    lines: svg.querySelectorAll('line').length,
+    filled: svg.querySelectorAll('rect, path, circle').length,
+    numbers: [...svg.querySelectorAll('text')].map((t) => t.textContent).filter((t) => /^\d+$/.test(t)).length,
+    hasCode: html.includes('code-here'),
+    a4: /size: A4/.test(html),
+  };
+});
+check('the printed sheet is an empty grid, not the answer', sheet.filled === 0, `${sheet.filled} filled shape(s)`);
+check('and it has the clues on it', sheet.numbers > 10, `${sheet.numbers} numbers`);
+check('and the grid lines to write in', sheet.lines > 10, `${sheet.lines} lines`);
+check('and the code, so paper and screen are the same puzzle', sheet.hasCode && sheet.a4);
+
 check('nothing threw along the way', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await page.screenshot({ path: new URL('../smoke.png', import.meta.url).pathname });

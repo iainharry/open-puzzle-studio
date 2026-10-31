@@ -188,7 +188,69 @@ canvas and requires the pixel to be the accent colour, because "a highlight was 
 and "a highlight can be seen" are different claims — the same lesson as §2, arriving again
 in a different costume.
 
-## 9. Decisions deliberately deferred
+## 9. A demonstration, not a video (M4)
+
+Asked for as "a video or demonstration clip", and deliberately not built as one.
+
+A video would be the largest asset in the build by an order of magnitude and would have to
+be downloaded before the app worked offline. It could not follow the theme or the board
+size, could not be paused on the step somebody did not understand, and would go stale the
+first time a button moved — **the same failure as a hand-written guide**, which is exactly
+why the sister project generates its guide from the live app rather than shipping one.
+
+So the app plays itself, with the real solver on the real board. A few kilobytes of code
+and no asset at all; it cannot go out of date because there is nothing to keep in step; and
+it is steppable, which a video is not.
+
+**It is only cheap because M2 and M3 exist.** A solver that already emits ordered
+deductions, each with a sentence written for a ten-year-old and the moves to carry it out,
+*is* a demonstration script. `buildScript()` is thirty lines.
+
+Three things a clip of a person would have shown, and what was done about each:
+
+- **A hand.** The demo draws a pointer ring onto the square it is about to mark. Drawn
+  after the scene rather than put into `Scene`, because it belongs to the demonstration
+  and no puzzle module should have to know that demonstrations exist.
+- **Hesitation.** Each caption sits for almost two seconds before anything is marked. A
+  demonstration that happens instantly teaches nothing.
+- **A real person's mistakes.** Not shown, and that is the honest gap. What is shown is
+  correct play only.
+
+Other decisions: it runs at tier 1 only, because a demonstration that reaches for a
+contradiction proof teaches a beginner the wrong thing about how these are solved; it is
+capped at ten beats, because somebody who has watched ten deductions has the idea and the
+eleventh is where they should be taking over; it always uses the same hand-drawn heart, so
+a teacher can talk about it; the board is deaf to the pointer while it runs; and stopping
+puts the player's own puzzle back.
+
+### The race the "nothing threw" check caught
+
+`demoWait()` read `this.demo.paused` **after** an await, having checked for null
+**before** it. Pressing Stop nulls it from another turn of the event loop, so the check
+said nothing about the world the read happened in. It threw a TypeError with no visible
+symptom — the demo had already stopped and everything looked right.
+
+That is the entire argument for the smoke test's last line. Thirty-nine checks of what a
+player can see all passed, and the fortieth, which only asks whether anything threw, is
+the one that found it.
+
+## 10. Printing: blank by construction (M4)
+
+A nonogram on paper is how most children will meet one in a classroom, so the sheet is the
+whole artefact rather than a convenience.
+
+The sister project shipped a printable sheet that **printed the answer** and passed four
+assertions, because each checked that something had been drawn rather than what it showed.
+The equivalent mistake here is passing the player's state into `printable()` instead of a
+blank board — so `printable(puzzle)` takes no state at all. The signature makes the bug
+unavailable rather than merely untaken.
+
+SVG rather than a canvas screenshot: a printed clue is read at arm's length and a bitmap
+scaled to A4 is soft exactly where the numbers are. It is also a few kilobytes of text
+instead of a megabyte of pixels. The test counts what is in the sheet — twelve lines, every
+clue, and **zero filled shapes**.
+
+## 11. Decisions deliberately deferred
 
 - **Cell size has no upper bound.** A 5×5 fills a desktop screen at 109px per cell, which
   looks odd to an adult and may be exactly right for a five-year-old on a tablet. Capping
@@ -199,7 +261,7 @@ in a different costume.
   all largely copied from the jigsaw app; none of them is interesting until there is a real
   puzzle to print.
 
-## 10. Known limitations
+## 12. Known limitations
 
 - **Generation blocks the UI.** Up to ~775ms measured for a tricky 20x20, and more on a
   tablet. Wants a worker.

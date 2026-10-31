@@ -221,3 +221,130 @@ body {
   color: var(--muted);
   font-size: 13px;
 }
+
+/* ---- The demonstration ------------------------------------------------------
+   A bar across the bottom of the board rather than a panel over it: the whole
+   point is to watch the board, and a caption that covers what it describes is
+   worse than no caption. */
+.demo-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
+}
+
+.demo-bar[hidden] {
+  display: none !important;
+}
+
+.demo-step {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #06101d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.demo-caption {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+/* ---- Finishing --------------------------------------------------------------
+   Carried over whole from the sister project, including the reasons: nothing
+   flashes, nothing covers the middle of the board, and no layer can swallow the
+   tap that comes next. */
+.celebrate {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.celebrate[hidden],
+.finish-banner[hidden] {
+  display: none !important;
+}
+
+.finish-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 28px);
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 45%);
+  pointer-events: none;
+}
+
+.finish-head {
+  font-size: 20px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.finish-detail {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.finish-close {
+  pointer-events: auto;
+  min-height: 32px;
+  flex: 0 0 auto;
+}
+
+.set-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ch-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn.on {
+  border-color: var(--accent);
+}
+
+@media (max-width: 560px) {
+  .finish-banner {
+    flex-wrap: wrap;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .demo-bar {
+    flex-wrap: wrap;
+  }
+}
