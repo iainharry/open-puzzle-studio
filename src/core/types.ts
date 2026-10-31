@@ -94,7 +94,35 @@ export interface SolveStep {
   readonly cells: readonly Cell[];
   /** Plain English, shown to a player as a hint. Written for a ten-year-old. */
   readonly why: string;
+  /**
+   * Which line the deduction is about, where that is meaningful.
+   *
+   * Carried as data rather than left in the prose. A hint whose first strength is "look at
+   * row 4" has to be able to *highlight* row 4, and working that out by parsing the
+   * sentence is the kind of thing that breaks the day somebody rewords it.
+   */
+  readonly line?: { readonly axis: 'row' | 'col'; readonly index: number };
+  /** What the step would do, for the strongest hint. Applying it is the shell's choice. */
+  readonly moves?: readonly unknown[];
 }
+
+/**
+ * What to tell a player who has asked for help.
+ *
+ * Two kinds, because there are two situations and conflating them is how a hint system
+ * becomes useless. Either there is a next deduction available, or **what they have already
+ * put down cannot be right** — and in the second case offering a deduction would be
+ * deducing from a false premise and sending them further wrong.
+ */
+export type Hint =
+  | { readonly kind: 'step'; readonly step: SolveStep }
+  | {
+      readonly kind: 'wrong';
+      /** The line that cannot be satisfied. Never the square that is wrong. */
+      readonly line: { readonly axis: 'row' | 'col'; readonly index: number };
+      readonly why: string;
+    }
+  | { readonly kind: 'done'; readonly why: string };
 
 /**
  * A puzzle type.
@@ -127,6 +155,19 @@ export interface PuzzleModule<Spec, Puzzle, Move, State> {
 
   /** Human-imitating. See `SolveReport`. */
   solve(puzzle: Puzzle, from: State, maxTier: number): SolveReport;
+
+  /**
+   * The next thing to do from here — cheaply.
+   *
+   * Separate from `solve()` because a hint needs *one* deduction and `solve()` works the
+   * whole puzzle out. On a 20x20 that is the difference between a button press and a
+   * noticeable pause, and the pause would happen on every press.
+   *
+   * It must also return the **easiest** available deduction rather than the first one a
+   * full-strength solver stumbles on. A hint that reaches for a contradiction proof when
+   * an obvious overlap was sitting there teaches the wrong lesson.
+   */
+  hint?(puzzle: Puzzle, state: State, maxTier: number): Hint;
 
   isSolved(puzzle: Puzzle, state: State): boolean;
   /** 0..1, for the status line and the library card. */

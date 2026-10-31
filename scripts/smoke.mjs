@@ -293,6 +293,87 @@ const reopened2 = await page.evaluate(() => ({
 }));
 check('the same code gives back the same picture', reopened2.code === generated.reopenCode && reopened2.filled === generated.beforeSolution, `${reopened2.filled} vs ${generated.beforeSolution} squares`);
 
+// 9. Hints, in three strengths. The feature this app is for, and the one most likely to
+// quietly become useless — so each strength is checked for what it does *and* for what it
+// does not do yet.
+const hints = await page.evaluate(async () => {
+  const app = globalThis.__ops;
+  document.querySelector('.size').value = '10';
+  document.querySelector('.tier').value = 'steady';
+  document.querySelector('[data-act="new"]').click();
+  await new Promise((r) => setTimeout(r, 2500));
+
+  const press = async () => {
+    document.querySelector('[data-act="hint"]').click();
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      status: document.querySelector('.status').textContent,
+      button: document.querySelector('.hint-btn').textContent,
+      board: app.session.serialise(),
+      highlighted: app.hintCells.length,
+    };
+  };
+
+  const blank = app.session.serialise();
+  const one = await press();
+  const two = await press();
+  const three = await press();
+
+  // Undo must take the whole applied hint back in one press, not cell by cell.
+  const depthBefore = app.session.history.depth;
+  document.querySelector('[data-act="undo"]').click();
+  await new Promise((r) => setTimeout(r, 200));
+  const afterUndo = app.session.serialise();
+  document.querySelector('[data-act="redo"]').click();
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Now put something impossible on the board and ask again.
+  const puzzle = app.session.puzzle;
+  let row = 0;
+  for (let r = 0; r < puzzle.rows; r++) {
+    const want = puzzle.rowClues[r].reduce((a, b) => a + b, 0);
+    if (want < puzzle.cols) { row = r; break; }
+  }
+  app.session.change('break it', () => {
+    for (let col = 0; col < puzzle.cols; col++) {
+      app.session.play({ col, row, mark: 'filled' }, 'wrong');
+    }
+  });
+  document.querySelector('[data-act="hint"]').click();
+  await new Promise((r) => setTimeout(r, 300));
+  const wrong = {
+    status: document.querySelector('.status').textContent,
+    board: app.session.serialise(),
+  };
+
+  // Sample the canvas where the broken row is. The wash under the marks is invisible on a
+  // filled square, so this checks the *picture* shows the highlight rather than checking
+  // that a highlight was requested.
+  await new Promise((r) => setTimeout(r, 300));
+  const canvas = document.querySelector('.board');
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const { cell, originX, originY } = app.layout;
+  const px = Math.round((originX + 1.5 * cell) * dpr);
+  const py = Math.round((originY + (row + 0.06) * cell) * dpr);
+  const [hr, hg, hb] = ctx.getImageData(px, py, 1, 1).data;
+  const accent = hb > hr + 20 && hb > 120;
+
+  return { blank, one, two, three, depthBefore, afterUndo, wrong, brokenRow: row + 1, accent, pixel: `${hr},${hg},${hb}` };
+});
+check('the first hint says where to look and nothing else', /Row|Column/.test(hints.one.status) && hints.one.board === hints.blank, hints.one.status);
+check('and highlights that line on the board', hints.one.highlighted >= 5, `${hints.one.highlighted} squares lit`);
+check('the second explains why, still without doing it', hints.two.status !== hints.one.status && hints.two.board === hints.blank, hints.two.status.slice(0, 70));
+check('and the button says what the next press will do', hints.one.button === 'Why?' && hints.two.button === 'Do it', `${hints.one.button} -> ${hints.two.button}`);
+check('the third actually does it', hints.three.board !== hints.blank, `${hints.three.board.replace(/\./g, '').length} squares decided`);
+// A hint applied as five separate steps would take five presses to take back.
+check('and the whole hint is one undo step', hints.afterUndo === hints.blank);
+
+// The most valuable hint there is, and the one a child cannot get by staring.
+check('a wrong board is reported as wrong, not deduced from', /cannot be right/.test(hints.wrong.status), hints.wrong.status.slice(0, 90));
+check('and the wrong line is visibly marked, over the squares already filled', hints.accent === true, `pixel at the row edge was ${hints.pixel}`);
+check('and it names the line, not the square', new RegExp(`row ${hints.brokenRow}\\b`, 'i').test(hints.wrong.status) && !/square \d/.test(hints.wrong.status), hints.wrong.status.slice(0, 90));
+
 check('nothing threw along the way', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await page.screenshot({ path: new URL('../smoke.png', import.meta.url).pathname });

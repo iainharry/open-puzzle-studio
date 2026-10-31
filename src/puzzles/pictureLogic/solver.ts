@@ -402,6 +402,11 @@ export function solveGrid(
           tier,
           cells: result.changed.map((i) => cellOf(axis, index, i)),
           why: `Look at ${LINE_NAME[axis]} ${index + 1}. ${result.why}`,
+          line: { axis, index },
+          moves: result.changed.map((i) => ({
+            ...cellOf(axis, index, i),
+            mark: result.line[i] === FILLED ? 'filled' : 'crossed',
+          })),
         });
         tierUsed = Math.max(tierUsed, tier);
         any = true;
@@ -471,3 +476,91 @@ function probe(grid: Grid, cells: LineCell[], steps: SolveStep[]): boolean {
   }
   return false;
 }
+
+
+/**
+ * The next single deduction from here, and nothing more.
+ *
+ * A hint needs one step; `solveGrid` works the whole puzzle out. On a 20x20 that is the
+ * difference between a button press and a noticeable pause, on every press.
+ *
+ * It sweeps the tiers from easiest upwards and stops at the first thing it finds, which is
+ * not only cheaper but **better teaching**: a hint that reaches for a contradiction proof
+ * while an obvious overlap sits two rows down shows a child the wrong lesson about how
+ * these puzzles are solved.
+ */
+export function nextStep(
+  grid: Grid,
+  cells: readonly LineCell[],
+  maxTier: number,
+): SolveStep | null {
+  for (const tier of [GENTLE, STEADY]) {
+    if (tier > maxTier) break;
+    for (const axis of ['row', 'col'] as const) {
+      const count = axis === 'row' ? grid.rows : grid.cols;
+      for (let index = 0; index < count; index++) {
+        const current = readLine(cells, grid, axis, index);
+        if (current.every((c) => c !== UNKNOWN)) continue;
+        const clue = axis === 'row' ? grid.rowClues[index]! : grid.colClues[index]!;
+        const result = tier === GENTLE ? trivialLine(current, clue) : completeLine(current, clue);
+        if (result === 'impossible' || !result) continue;
+        return {
+          technique: result.technique,
+          tier,
+          cells: result.changed.map((i) => cellOf(axis, index, i)),
+          why: `Look at ${LINE_NAME[axis]} ${index + 1}. ${result.why}`,
+          line: { axis, index },
+          moves: result.changed.map((i) => ({
+            ...cellOf(axis, index, i),
+            mark: result.line[i] === FILLED ? 'filled' : 'crossed',
+          })),
+        };
+      }
+    }
+  }
+
+  if (maxTier >= TRICKY) {
+    const trial = [...cells];
+    const steps: SolveStep[] = [];
+    if (probe(grid, trial, steps) && steps[0]) {
+      const step = steps[0];
+      const at = step.cells[0]!;
+      return {
+        ...step,
+        line: { axis: 'row', index: at.row },
+        moves: [{ ...at, mark: trial[at.row * grid.cols + at.col] === FILLED ? 'filled' : 'crossed' }],
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The first line whose marks cannot be made to fit its clue.
+ *
+ * This is the "check my work" that matters, and it is answer-free by construction: it
+ * never looks at the solution, only at whether what the player has written down is
+ * *consistent with the clues*. So it can say "row 4 has gone wrong" without saying which
+ * square — which is the difference between help and surrender.
+ *
+ * A player's crossed-out squares count. A square crossed in error is exactly as
+ * contradictory as a square filled in error, and is the mistake that is hardest to find
+ * by eye.
+ */
+export function firstBrokenLine(
+  grid: Grid,
+  cells: readonly LineCell[],
+): { axis: 'row' | 'col'; index: number } | null {
+  for (const axis of ['row', 'col'] as const) {
+    const count = axis === 'row' ? grid.rows : grid.cols;
+    for (let index = 0; index < count; index++) {
+      const clue = axis === 'row' ? grid.rowClues[index]! : grid.colClues[index]!;
+      if (completeLine(readLine(cells, grid, axis, index), clue) === 'impossible') {
+        return { axis, index };
+      }
+    }
+  }
+  return null;
+}
+
+export { LINE_NAME };

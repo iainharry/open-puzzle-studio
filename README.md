@@ -6,9 +6,13 @@ Sister project to [Open Jigsaw Studio](https://github.com/iainharry/open-jigsaw-
 and built on the parts of it that turned out to be about *playing a puzzle* rather than
 about jigsaws.
 
-**Status: M1.** The chassis works end to end with one puzzle type and three hand-drawn
-pictures. There is no generator and no solver yet — those are M2, and nothing before them
-is a real nonogram.
+**Status: M3.** Generated puzzles at three real difficulties, solvable by reasoning, with
+a shareable code and a daily puzzle that needs no server. Hints come in three strengths —
+where to look, why, then do it — and a board that has gone wrong is reported as wrong
+rather than deduced from.
+
+Still to come: printing, a generated guide, assistance levels and the celebration (M4),
+then a second puzzle type.
 
 ## Why this exists when Simon Tatham's collection already does
 

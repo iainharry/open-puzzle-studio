@@ -177,6 +177,29 @@ export function drawScene(
     ctx.stroke();
   }
 
+  /**
+   * Highlights again, this time as an outline over the top.
+   *
+   * The wash underneath reads beautifully on empty squares and is completely invisible on
+   * filled ones — which is exactly where the most important highlight is needed, because
+   * "something in this row cannot be right" is a hint about a row the player has already
+   * filled in. Found by looking at the picture the smoke test produced, not by any
+   * assertion, which is the argument for looking at it.
+   */
+  if (scene.highlight.length > 0) {
+    ctx.strokeStyle = theme.highlight;
+    ctx.lineWidth = Math.max(2, cell * 0.1);
+    for (const h of scene.highlight) {
+      const inset = ctx.lineWidth / 2;
+      ctx.strokeRect(
+        x0 + h.col * cell + inset,
+        y0 + h.row * cell + inset,
+        cell - ctx.lineWidth,
+        cell - ctx.lineWidth,
+      );
+    }
+  }
+
   // Labels last.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';

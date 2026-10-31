@@ -55,6 +55,7 @@ export class App {
     libList: HTMLElement;
     help: HTMLElement;
     helpNote: HTMLElement;
+    hint: HTMLButtonElement;
   };
 
   private session: Session | null = null;
@@ -62,6 +63,17 @@ export class App {
   private tool = 'fill';
   private theme: Theme = DARK;
   private layout: Layout | null = null;
+  /**
+   * How far the current hint has been pushed: 0 none, 1 where to look, 2 why, 3 done.
+   *
+   * Three strengths rather than one button that fills a square in, because the point of a
+   * hint in a classroom is to teach the technique. "Look at row 4" is often all somebody
+   * needs, and giving them the answer instead takes the puzzle away from them.
+   */
+  private hintLevel = 0;
+  private hintCells: readonly { col: number; row: number }[] = [];
+  /** Counted, so a finish that leaned on help is recorded as one. */
+  private hintsUsed = 0;
   private dirty = true;
   private saveTimer: number | null = null;
   /** Read by the smoke test. See `Session.unguardedChanges`. */
@@ -91,6 +103,7 @@ export class App {
           <button class="btn" data-act="undo" title="Take back the last thing you did (Ctrl+Z)" disabled>Undo</button>
           <button class="btn" data-act="redo" title="Put it back (Ctrl+Y)" disabled>Redo</button>
           <span class="divider"></span>
+          <button class="btn hint-btn" data-act="hint" title="Ask for help. Press once for where to look, again for why, again to have it done.">Hint</button>
           <button class="btn" data-act="help" title="How to play">How to play</button>
           <button class="btn" data-act="library" title="Every puzzle you have started is saved here">My puzzles</button>
           <label class="field" title="This puzzle, as text. Anyone who types it in gets exactly this picture.">Code
@@ -149,6 +162,7 @@ export class App {
       libList: q('.lib-list'),
       help: q('.help'),
       helpNote: q('.help-note'),
+      hint: q<HTMLButtonElement>('.hint-btn'),
     };
     q<HTMLElement>('.version').textContent = APP_VERSION;
 
@@ -190,6 +204,7 @@ export class App {
       else if (act === 'redo') this.redo();
       else if (act === 'library') void this.openLibrary();
       else if (act === 'close-library') this.els.library.hidden = true;
+      else if (act === 'hint') this.askHint();
       else if (act === 'help') this.els.help.hidden = false;
       else if (act === 'close-help') this.els.help.hidden = true;
       else if (act === 'theme') this.toggleTheme();
@@ -419,6 +434,8 @@ export class App {
   private install(session: Session, record: PuzzleRecord): void {
     this.session = session;
     this.record = record;
+    this.clearHint();
+    this.hintsUsed = record.hintsUsed ?? 0;
     this.tool = session.module.tools[0]?.id ?? 'fill';
     setLastOpened(record.id);
     this.els.code.value = App.codeFor(normaliseSpec(record.spec));
@@ -437,10 +454,81 @@ export class App {
   }
 
   private afterMove(): void {
+    // Any move makes the open hint stale: it was about a board that no longer exists.
+    this.clearHint();
     this.syncHistory();
     this.updateStatus();
     this.dirty = true;
     this.scheduleSave();
+  }
+
+  private clearHint(): void {
+    this.hintLevel = 0;
+    this.hintCells = [];
+    this.els.hint.textContent = 'Hint';
+  }
+
+  /**
+   * Help, in three strengths.
+   *
+   * Press once and the line to look at is highlighted and nothing more. Press again and it
+   * says why. Press a third time and it does it. Each press is a decision to be told more,
+   * and a child who only ever needs the first one never sees the answer.
+   *
+   * A wrong board short-circuits all of it — see `pictureLogic.hint()` for why that has to
+   * come first.
+   */
+  private askHint(): void {
+    const session = this.session;
+    if (!session) return;
+    const module = session.module;
+    if (!module.hint) {
+      this.setStatus('This puzzle cannot give hints.');
+      return;
+    }
+
+    const hint = module.hint(session.puzzle, (session as unknown as { state: unknown }).state, 3);
+
+    if (hint.kind === 'wrong') {
+      this.hintsUsed++;
+      this.hintCells = lineCells(session, hint.line);
+      this.hintLevel = 2;
+      this.els.hint.textContent = 'Hint';
+      this.setStatus(hint.why);
+      this.dirty = true;
+      return;
+    }
+    if (hint.kind === 'done') {
+      this.clearHint();
+      this.setStatus(hint.why);
+      return;
+    }
+
+    const step = hint.step;
+    this.hintLevel++;
+    if (this.hintLevel === 1) {
+      this.hintsUsed++;
+      this.hintCells = step.line ? lineCells(session, step.line) : step.cells;
+      this.els.hint.textContent = 'Why?';
+      const where = step.line
+        ? `${step.line.axis === 'row' ? 'Row' : 'Column'} ${step.line.index + 1}`
+        : 'This part of the board';
+      this.setStatus(`${where} has something you can work out. Have a look before pressing again.`);
+    } else if (this.hintLevel === 2) {
+      this.hintCells = step.cells;
+      this.els.hint.textContent = 'Do it';
+      this.setStatus(step.why);
+    } else {
+      const moves = (step.moves ?? []) as unknown[];
+      session.change('a hint', () => {
+        for (const move of moves) session.play(move, 'a hint');
+      });
+      this.clearHint();
+      this.syncHistory();
+      this.updateStatus();
+      this.scheduleSave();
+    }
+    this.dirty = true;
   }
 
   private undo(): void {
@@ -480,7 +568,14 @@ export class App {
     // would be the app flattering itself.
     const rated = tierName((this.session.puzzle as { tierUsed: number }).tierUsed);
     if (this.session.solved) {
-      this.setStatus(`Finished — ${this.record?.title ?? 'the picture'} is complete.`);
+      // What it took is part of what happened. A finish that leaned on help is still a
+      // finish, and quietly not mentioning it would make the record flattering rather
+      // than true.
+      const helped =
+        this.hintsUsed === 0
+          ? ' No hints.'
+          : ` With ${this.hintsUsed} hint${this.hintsUsed === 1 ? '' : 's'}.`;
+      this.setStatus(`Finished — ${this.record?.title ?? 'the picture'} is complete.${helped}`);
       return;
     }
     this.setStatus(`${rated} · ${Math.round(this.session.progress * 100)}% of the picture filled in`);
@@ -504,6 +599,7 @@ export class App {
     if (!session || !record) return;
     record.state = session.serialise();
     record.progress = session.progress;
+    record.hintsUsed = this.hintsUsed;
     record.lastPlayed = Date.now();
     if (session.solved && record.completedAt === null) record.completedAt = Date.now();
     try {
@@ -546,10 +642,33 @@ export class App {
 
   private loop = (): void => {
     if (this.dirty && this.session) {
-      this.layout = drawScene(this.canvas, this.session.layout(), this.theme);
+      // The highlight is composed here rather than passed into `layout()`.
+      // A Scene is a plain value, so the shell can add to one without the puzzle module
+      // needing to know that hints exist at all — which is the seam working.
+      const scene = this.session.layout();
+      this.layout = drawScene(
+        this.canvas,
+        this.hintCells.length > 0 ? { ...scene, highlight: this.hintCells } : scene,
+        this.theme,
+      );
       this.dirty = false;
       this.session.checkGuard();
     }
     requestAnimationFrame(this.loop);
   };
+}
+
+
+/** Every cell of a row or column, for the "where to look" highlight. */
+function lineCells(
+  session: Session,
+  line: { axis: 'row' | 'col'; index: number },
+): { col: number; row: number }[] {
+  const scene = session.layout();
+  const n = line.axis === 'row' ? scene.cols : scene.rows;
+  const out: { col: number; row: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push(line.axis === 'row' ? { col: i, row: line.index } : { col: line.index, row: i });
+  }
+  return out;
 }

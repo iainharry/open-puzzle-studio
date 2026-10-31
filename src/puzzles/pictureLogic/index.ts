@@ -33,7 +33,10 @@ import type {
 import {
   BLANK,
   FILLED,
+  LINE_NAME,
   UNKNOWN,
+  firstBrokenLine,
+  nextStep,
   solveGrid,
   type Grid,
   type LineCell,
@@ -298,6 +301,45 @@ export const pictureLogic: PuzzleModule<
       steps: report.steps,
       tierUsed: report.tierUsed,
     } satisfies SolveReport;
+  },
+
+  /**
+   * What to tell a player who has asked for help.
+   *
+   * The order matters and is the whole design. **A contradiction is checked first**,
+   * because offering a deduction to somebody whose board is already wrong is deducing
+   * from a false premise and sending them further wrong — and it is the failure they
+   * cannot find by staring, because the mistake is usually nowhere near where they are
+   * looking.
+   *
+   * And when it reports one, it names the **line**, never the square. Pointing at the
+   * square is surrender dressed up as help; naming the line hands back a puzzle small
+   * enough to re-check and leaves the finding to them.
+   */
+  hint(puzzle, state, maxTier) {
+    const grid = gridOf(puzzle);
+    const cells = toLineCells(state);
+
+    const broken = firstBrokenLine(grid, cells);
+    if (broken) {
+      return {
+        kind: 'wrong',
+        line: broken,
+        why:
+          `Something in ${LINE_NAME[broken.axis]} ${broken.index + 1} cannot be right — ` +
+          `what is marked there does not fit its numbers. Check that line again before going on.`,
+      };
+    }
+
+    const step = nextStep(grid, cells, maxTier);
+    if (step) return { kind: 'step', step };
+
+    return {
+      kind: 'done',
+      why: cells.every((c) => c !== UNKNOWN)
+        ? 'Every square is decided — this one is finished.'
+        : 'There is nothing more to work out from the numbers alone right now.',
+    };
   },
 
   isSolved(puzzle, state) {

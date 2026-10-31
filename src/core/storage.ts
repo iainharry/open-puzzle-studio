@@ -24,6 +24,8 @@ export interface PuzzleRecord {
   /** 0..1. Stored so the library can draw a card without regenerating the puzzle. */
   progress: number;
   elapsedMs: number;
+  /** How much help was taken. Kept so a completion record is true rather than flattering. */
+  hintsUsed?: number;
 }
 
 const DB_NAME = 'open-puzzle-studio';

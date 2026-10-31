@@ -140,7 +140,55 @@ asserted a deduction that no arrangement actually supports. They were only caugh
 working the line out by hand after the code disagreed — which is the right order, and the
 temptation was to "fix" the solver to match the test.
 
-## 8. Decisions deliberately deferred
+## 8. Hints, in three strengths (M3)
+
+The feature the whole project was argued for, and it cost almost nothing once `solve()`
+existed — which was the point of building the solver first.
+
+**Three strengths, not one button that fills a square in.** Press once and the line is
+highlighted and nothing more. Press again and it says why. Press a third time and it does
+it. Each press is a decision to be told more, and a child who only ever needs the first
+one never sees the answer. A single button that completes a square takes the puzzle away
+from the person solving it.
+
+**A wrong board is checked first, and that order is the design.** Offering a deduction to
+somebody whose marks already contradict the clues is deducing from a false premise and
+sending them further wrong. It is also the mistake a child cannot find by staring, because
+it is usually nowhere near where they are looking.
+
+**It names the line, never the square.** Pointing at the square is surrender dressed up as
+help. Naming the line hands back a problem small enough to re-check and leaves the finding
+to them. The check is answer-free by construction: it never looks at the solution, only at
+whether what the player wrote down can satisfy the clues — so it cannot leak, and a test
+pins that by running it against a puzzle whose stored solution has been replaced with
+rubbish.
+
+**The easiest deduction, not the first one found.** `nextStep()` sweeps the tiers upward
+and stops. A hint that reaches for a contradiction proof while an obvious overlap sits two
+rows down teaches the wrong lesson about how these are solved.
+
+**`nextStep()` is separate from `solve()` for cost.** A hint needs one deduction;
+`solve()` works the whole puzzle out. On a 20x20 that is the difference between a button
+press and a pause, on every press.
+
+**The highlight is composed by the shell, not by `layout()`.** A `Scene` is a plain value,
+so the shell spreads a new `highlight` onto the one the module returned. The puzzle module
+does not know hints exist. That is the seam doing its job, and it saved an interface
+change.
+
+### What looking at the picture caught
+
+Every assertion passed and the highlight was invisible. It was drawn as a 25%-alpha wash
+*under* the marks — which reads beautifully on an empty square and not at all on a filled
+one. The most important highlight in the app is "something in this row cannot be right",
+about a row the player has **already filled in**.
+
+Fixed by stroking the highlighted cells over the top as well. The new assertion samples the
+canvas and requires the pixel to be the accent colour, because "a highlight was requested"
+and "a highlight can be seen" are different claims — the same lesson as §2, arriving again
+in a different costume.
+
+## 9. Decisions deliberately deferred
 
 - **Cell size has no upper bound.** A 5×5 fills a desktop screen at 109px per cell, which
   looks odd to an adult and may be exactly right for a five-year-old on a tablet. Capping
@@ -151,15 +199,14 @@ temptation was to "fix" the solver to match the test.
   all largely copied from the jigsaw app; none of them is interesting until there is a real
   puzzle to print.
 
-## 9. Known limitations
+## 10. Known limitations
 
 - **Generation blocks the UI.** Up to ~775ms measured for a tricky 20x20, and more on a
   tablet. Wants a worker.
 - **Large boards cannot be Gentle.** The app falls back and reports honestly, but a person
   who asks for 20x20 Gentle will not get it. Explaining *why* in the app is M4's job.
-- **Hints are not surfaced.** `solve()` already returns the next deduction and its reason
-  from the player's own board; nothing in the shell asks for it yet. That is M3, and it is
-  one function call.
+- **Hint counting is per puzzle, not per session.** Reopening a puzzle keeps the count,
+  which is right, but there is no way to see it other than on finishing.
 - **No printing, no guide, no assistance levels, no celebration.** M4.
 
 ## Dependencies
