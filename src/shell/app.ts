@@ -1,9 +1,37 @@
 /**
  * The shell: toolbar, canvas, status.
  *
- * It knows about `PuzzleModule`, `Session` and `Scene`, and nothing about nonograms. If a
- * line in this file ever mentions a clue, a run or a picture, the seam this milestone
- * exists to prove has leaked and that is the bug.
+ * It knows about `PuzzleModule`, `Session` and `Scene`, and nothing about any particular
+ * puzzle.
+ *
+ * ## That claim used to be false, and this is what it cost
+ *
+ * The same sentence stood at the top of this file from M1 to M4, together with "if a line
+ * in this file ever mentions a clue, a run or a picture, the seam this milestone exists to
+ * prove has leaked and that is the bug". By M4 the file mentioned pictures, clues and runs
+ * in fourteen places and imported the nonogram module directly, and nothing could tell,
+ * because the only puzzle that existed was a nonogram.
+ *
+ * What was actually in here, doing one puzzle's work:
+ *
+ * - `import { PICTURE_NAMES, normaliseSpec, pictureLogic } from '../puzzles/pictureLogic'`,
+ *   and `tierName` from its generator.
+ * - A hard-coded size list, `[5, 7, 8, 10, 12, 15, 20]`, offered to every puzzle.
+ * - A "Starter" dropdown built from the nonogram's hand-drawn pictures.
+ * - `codeFor` and `specFromCode`, which knew the shape of a nonogram spec.
+ * - `chosenSpec(): PictureSpec` — the return type says it all.
+ * - A help panel written in HTML about runs, clues and crossing out.
+ * - "% of the picture filled in" in the status line.
+ * - The demonstration's puzzle, `{ kind: 'drawn', picture: 'heart' }`, named here.
+ * - Space swapping between `'fill'` and `'cross'` by name.
+ * - `puzzle as { rows, cols, tierUsed, title }`, four times, because the interface had no
+ *   way to ask.
+ *
+ * All of it is now asked of the module. The file is about the same length, which is the
+ * honest outcome: the work did not vanish, it moved to where it belongs, and the same
+ * controls now drive a puzzle the shell has never heard of. That is the thing the three
+ * layers were for, and until a second puzzle existed there was no way to know whether it
+ * was true.
  */
 
 import {
@@ -11,6 +39,7 @@ import {
   dailySeed,
   decodeGameId,
   encodeGameId,
+  lookCells,
   type AnyPuzzleModule,
   type Cell,
 } from '../core/index.js';
@@ -33,13 +62,8 @@ import {
   type Layout,
   type Theme,
 } from '../render/scene.js';
-import {
-  PICTURE_NAMES,
-  normaliseSpec,
-  pictureLogic,
-  type PictureSpec,
-} from '../puzzles/pictureLogic/index.js';
-import { tierName } from '../puzzles/pictureLogic/generate.js';
+import { pictureLogic } from '../puzzles/pictureLogic/index.js';
+import { numberPlace } from '../puzzles/numberPlace/index.js';
 import { TIMING, buildScript, type Beat } from './demo.js';
 import { sheetHtml } from './sheet.js';
 import {
@@ -53,10 +77,23 @@ import {
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'development build';
 
-/** Every puzzle type the app knows, by id. One entry today, which is the point. */
-const MODULES: Record<string, AnyPuzzleModule> = {
-  [pictureLogic.id]: pictureLogic,
-};
+/**
+ * Every puzzle type the app knows, in the order they are offered.
+ *
+ * The only two lines in this file that name a puzzle, and they are a registry rather than
+ * a dependency: nothing below reads either name again.
+ */
+const MODULES: readonly AnyPuzzleModule[] = [pictureLogic, numberPlace];
+const BY_ID: Record<string, AnyPuzzleModule> = Object.fromEntries(
+  MODULES.map((m) => [m.id, m]),
+);
+
+/** Four base-36 characters: 1.7 million puzzles per size, and writable on a whiteboard. */
+function freshSeed(): string {
+  return Math.floor(Math.random() * 1_679_616)
+    .toString(36)
+    .padStart(4, '0');
+}
 
 export class App {
   private readonly canvas: HTMLCanvasElement;
@@ -65,16 +102,15 @@ export class App {
     undo: HTMLButtonElement;
     redo: HTMLButtonElement;
     tools: HTMLElement;
-    picker: HTMLSelectElement;
-    size: HTMLSelectElement;
-    tier: HTMLSelectElement;
+    puzzle: HTMLSelectElement;
+    options: HTMLElement;
     code: HTMLInputElement;
     library: HTMLElement;
     libList: HTMLElement;
     help: HTMLElement;
-    helpNote: HTMLElement;
+    helpTitle: HTMLElement;
+    helpBody: HTMLElement;
     hint: HTMLButtonElement;
-    setCelebrate: HTMLSelectElement;
     celebrateCanvas: HTMLCanvasElement;
     finishBanner: HTMLElement;
     finishDetail: HTMLElement;
@@ -86,7 +122,9 @@ export class App {
 
   private session: Session | null = null;
   private record: PuzzleRecord | null = null;
-  private tool = 'fill';
+  /** Which puzzle type the toolbar is currently offering choices for. */
+  private chooser: AnyPuzzleModule = MODULES[0]!;
+  private tool = '';
   private theme: Theme = DARK;
   private layout: Layout | null = null;
   /**
@@ -97,7 +135,7 @@ export class App {
    * needs, and giving them the answer instead takes the puzzle away from them.
    */
   private hintLevel = 0;
-  private hintCells: readonly { col: number; row: number }[] = [];
+  private hintCells: readonly Cell[] = [];
   /** Counted, so a finish that leaned on help is recorded as one. */
   private hintsUsed = 0;
   /** Non-null while the demonstration is running. */
@@ -109,6 +147,12 @@ export class App {
     pointer: Cell | null;
     returnTo: PuzzleRecord | null;
   } | null = null;
+  /**
+   * The finishing control, built once and moved into the help panel whenever that panel is
+   * rebuilt for a different puzzle. One element rather than one per rebuild, so the
+   * listener is attached once and the chosen value survives switching puzzle.
+   */
+  private readonly celebrateSelect: HTMLSelectElement;
   private celebration: CelebrationLevel = 'full';
   private stopCelebration: (() => void) | null = null;
   private celebrateTimer = 0;
@@ -124,17 +168,12 @@ export class App {
       <div class="ops">
         <header class="bar">
           <strong class="brand">Open Puzzle Studio</strong>
-          <label class="field" title="How big the picture is. Bigger takes longer and gives more to go on.">Size
-            <select class="size"></select>
+          <label class="field" title="Which kind of puzzle to play">Puzzle
+            <select class="puzzle"></select>
           </label>
-          <label class="field" title="How much working out it takes. Gentle puzzles never need more than looking at one line at a time.">Difficulty
-            <select class="tier"></select>
-          </label>
-          <button class="btn" data-act="new" title="Make a new picture at the size and difficulty chosen here">New puzzle</button>
+          <span class="options"></span>
+          <button class="btn" data-act="new" title="Make a new puzzle with the choices made here">New puzzle</button>
           <button class="btn" data-act="daily" title="The same puzzle for everyone today, with no account and nothing uploaded">Today&rsquo;s</button>
-          <label class="field" title="One of the small hand-drawn pictures, for a first go">Starter
-            <select class="picker"></select>
-          </label>
           <span class="divider"></span>
           <span class="tools"></span>
           <span class="divider"></span>
@@ -143,9 +182,9 @@ export class App {
           <span class="divider"></span>
           <button class="btn hint-btn" data-act="hint" title="Ask for help. Press once for where to look, again for why, again to have it done.">Hint</button>
           <button class="btn" data-act="help" title="How to play, and a demonstration to watch">How to play</button>
-          <button class="btn" data-act="print" title="Print this puzzle on paper, with the numbers and an empty grid">Print</button>
+          <button class="btn" data-act="print" title="Print this puzzle on paper, with the clues and an empty grid">Print</button>
           <button class="btn" data-act="library" title="Every puzzle you have started is saved here">My puzzles</button>
-          <label class="field" title="This puzzle, as text. Anyone who types it in gets exactly this picture.">Code
+          <label class="field" title="This puzzle, as text. Anyone who types it in gets exactly this puzzle.">Code
             <input class="code" type="text" readonly size="32" title="Copy this to share the puzzle" />
           </label>
           <button class="btn" data-act="theme" title="Switch between the dark and light board">Light</button>
@@ -176,32 +215,10 @@ export class App {
         </div>
         <div class="help" hidden>
           <div class="lib-panel">
-            <div class="lib-head"><strong>How to play</strong>
+            <div class="lib-head"><strong class="help-title">How to play</strong>
               <button class="btn" data-act="close-help">Close</button>
             </div>
-            <div class="help-body">
-              <p>The numbers tell you how many squares in a row are filled in, in order.
-              A row marked <b>3 1</b> has a block of three, then at least one gap, then a
-              single square. Fill in the right squares and a picture appears.</p>
-              <ul>
-                <li><b>Fill</b> colours a square in. Press it again to clear it.</li>
-                <li><b>Cross out</b> marks a square you are sure is <em>empty</em>. This is
-                not decoration &mdash; crossing out is how you work the rest out, and
-                without it you are solving a harder puzzle than the one in front of you.</li>
-                <li><b>Drag</b> across several squares to do a whole run at once.</li>
-                <li>Press <b>space</b> to swap between Fill and Cross out.</li>
-                <li>A clue goes faint when that line is finished.</li>
-              </ul>
-              <p>Every puzzle here can be worked out by reasoning. There is never a need to
-              guess.</p>
-              <p class="help-note"></p>
-              <div class="ch-actions">
-                <button class="btn on" data-act="demo" title="Watch the app solve a small one, a step at a time">Show me &mdash; watch a puzzle being solved</button>
-              </div>
-              <label class="set-row" title="What happens when a puzzle is finished">Finishing
-                <select class="set-celebrate"></select>
-              </label>
-            </div>
+            <div class="help-body"></div>
           </div>
         </div>
       </div>`;
@@ -213,16 +230,15 @@ export class App {
       undo: q<HTMLButtonElement>('[data-act="undo"]'),
       redo: q<HTMLButtonElement>('[data-act="redo"]'),
       tools: q('.tools'),
-      picker: q<HTMLSelectElement>('.picker'),
-      size: q<HTMLSelectElement>('.size'),
-      tier: q<HTMLSelectElement>('.tier'),
+      puzzle: q<HTMLSelectElement>('.puzzle'),
+      options: q('.options'),
       code: q<HTMLInputElement>('.code'),
       library: q('.library'),
       libList: q('.lib-list'),
       help: q('.help'),
-      helpNote: q('.help-note'),
+      helpTitle: q('.help-title'),
+      helpBody: q('.help-body'),
       hint: q<HTMLButtonElement>('.hint-btn'),
-      setCelebrate: q<HTMLSelectElement>('.set-celebrate'),
       celebrateCanvas: q<HTMLCanvasElement>('.celebrate'),
       finishBanner: q('.finish-banner'),
       finishDetail: q('.finish-detail'),
@@ -232,42 +248,72 @@ export class App {
       demoPause: q<HTMLButtonElement>('[data-act="demo-pause"]'),
     };
     q<HTMLElement>('.version').textContent = APP_VERSION;
+    this.celebrateSelect = this.buildCelebrateSetting();
 
-    for (const name of PICTURE_NAMES) {
+    for (const module of MODULES) {
       const option = document.createElement('option');
-      option.value = name;
-      option.textContent = name[0]!.toUpperCase() + name.slice(1);
-      this.els.picker.append(option);
+      option.value = module.id;
+      option.textContent = module.name;
+      option.title = module.blurb;
+      this.els.puzzle.append(option);
     }
-    // Sizes a person would actually choose, not every number. 5x5 is a first go; 20x20 is
-    // an evening. The upper end is capped by how long generation takes to find a puzzle
-    // the solver can finish, which the tests measure rather than assume.
-    // 7x7 is here because it was asked for, and because the gap between 5 and 8 is the
-    // gap between "a first go" and "a real puzzle" for the children this is aimed at.
-    for (const n of [5, 7, 8, 10, 12, 15, 20]) {
-      const option = document.createElement('option');
-      option.value = String(n);
-      option.textContent = `${n} \u00d7 ${n}`;
-      this.els.size.append(option);
-    }
-    this.els.size.value = '10';
-    for (const tier of pictureLogic.tiers) {
-      const option = document.createElement('option');
-      option.value = tier.id;
-      option.textContent = tier.name;
-      this.els.tier.append(option);
-    }
-    this.els.tier.value = 'steady';
+    this.els.puzzle.value = this.chooser.id;
+    this.syncOptions();
 
     this.wire();
     void this.start();
     requestAnimationFrame(this.loop);
   }
 
+  // --- Choosing a puzzle -----------------------------------------------------
+
+  /**
+   * Build the toolbar's choices from whatever the chosen puzzle says it offers.
+   *
+   * This replaced two hard-coded dropdowns. The nonogram's sizes are 5 to 20 and a few
+   * hand-drawn starters; the number puzzle's are 4, 6 and 9, plus whether to show numbers
+   * or shapes. One of those lists used to be in this file, and was silently offered to
+   * everything.
+   */
+  private syncOptions(): void {
+    this.els.options.innerHTML = '';
+    for (const choice of this.chooser.options()) {
+      const label = document.createElement('label');
+      label.className = 'field';
+      label.title = choice.help;
+      label.append(document.createTextNode(choice.label));
+      const select = document.createElement('select');
+      select.dataset['choice'] = choice.id;
+      for (const value of choice.values) {
+        const option = document.createElement('option');
+        option.value = value.value;
+        option.textContent = value.label;
+        select.append(option);
+      }
+      select.value = choice.initial;
+      label.append(select);
+      this.els.options.append(label);
+    }
+  }
+
+  /** The spec the toolbar is currently describing. */
+  private chosenSpec(seed = freshSeed()): unknown {
+    const chosen: Record<string, string> = {};
+    for (const select of this.els.options.querySelectorAll<HTMLSelectElement>('select')) {
+      const id = select.dataset['choice'];
+      if (id) chosen[id] = select.value;
+    }
+    return this.chooser.specFrom(chosen, seed);
+  }
+
+  private static codeFor(module: AnyPuzzleModule, spec: unknown): string {
+    return encodeGameId(module.id, module.encode(module.normalise(spec)));
+  }
+
   private wire(): void {
     this.root.addEventListener('click', (e) => {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset['act'];
-      if (act === 'new') void this.newPuzzle(this.chosenSpec());
+      if (act === 'new') void this.newPuzzle(this.chooser, this.chosenSpec());
       else if (act === 'daily') void this.openDaily();
       else if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
@@ -282,48 +328,26 @@ export class App {
       else if (act === 'close-help') this.els.help.hidden = true;
       else if (act === 'theme') this.toggleTheme();
       else if (act === 'tool') {
-        this.tool = (e.target as HTMLElement).dataset['tool'] ?? 'fill';
-        this.syncTools();
+        const id = (e.target as HTMLElement).dataset['tool'];
+        if (id) {
+          this.tool = id;
+          this.syncTools();
+        }
       }
     });
 
-    for (const choice of [
-      { value: 'full', label: 'Squares and a sound' },
-      { value: 'quiet', label: 'Squares, no sound' },
-      { value: 'off', label: 'Nothing' },
-    ]) {
-      const option = document.createElement('option');
-      option.value = choice.value;
-      option.textContent = choice.label;
-      this.els.setCelebrate.append(option);
-    }
-    this.els.setCelebrate.value = this.celebration;
-    this.els.setCelebrate.addEventListener('change', () => {
-      this.celebration = this.els.setCelebrate.value as CelebrationLevel;
-      try {
-        localStorage.setItem('ops:celebrate', this.celebration);
-      } catch {
-        /* storage disabled; it simply starts at full next time */
-      }
-      // Shown rather than described: nobody can picture "squares and a sound" from a
-      // dropdown, and the alternative is finishing a puzzle to find out.
-      if (this.celebration !== 'off') this.celebrate('A taste of it.');
-    });
-    try {
-      const saved = localStorage.getItem('ops:celebrate');
-      if (saved === 'off' || saved === 'quiet' || saved === 'full') {
-        this.celebration = saved;
-        this.els.setCelebrate.value = saved;
-      }
-    } catch {
-      /* storage disabled */
-    }
-    this.els.finishBanner.querySelector('.finish-close')?.addEventListener('click', () => {
-      this.hideCelebration();
+    this.els.puzzle.addEventListener('change', () => {
+      const module = BY_ID[this.els.puzzle.value];
+      if (!module) return;
+      this.chooser = module;
+      this.syncOptions();
+      void this.newPuzzle(module, this.chosenSpec());
     });
 
-    this.els.picker.addEventListener('change', () => {
-      void this.newPuzzle({ kind: 'drawn', picture: this.els.picker.value });
+    this.els.options.addEventListener('change', () => {
+      // Say what pressing New would now give, without taking the player's board away:
+      // changing a dropdown should never destroy a half-finished puzzle.
+      this.setStatus('Press New puzzle for one of those.');
     });
 
     window.addEventListener('keydown', (e) => {
@@ -338,10 +362,28 @@ export class App {
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      // Space swaps the tool rather than needing the toolbar. On a tablet the toolbar is
-      // the only way, which is one of the things the first playtest should watch.
-      if (e.key === ' ') {
-        this.tool = this.tool === 'fill' ? 'cross' : 'fill';
+
+      const tools = this.session?.tools ?? [];
+      /**
+       * A key that matches a tool's name picks that tool.
+       *
+       * Generic by construction rather than by a list: the number puzzle's tools are
+       * called "1" to "9", so the digit keys work and nothing in this file had to be told
+       * about digits. The nonogram's are called "Fill" and "Cross out", so no single key
+       * matches and nothing happens. This replaced a line that swapped between the strings
+       * `'fill'` and `'cross'`.
+       */
+      const named = tools.find((t) => t.name.toLowerCase() === e.key.toLowerCase());
+      if (named) {
+        this.tool = named.id;
+        this.syncTools();
+        e.preventDefault();
+        return;
+      }
+      // Space steps through the tools, which is the only way round a toolbar on a tablet.
+      if (e.key === ' ' && tools.length > 1) {
+        const at = tools.findIndex((t) => t.id === this.tool);
+        this.tool = tools[(at + 1) % tools.length]!.id;
         this.syncTools();
         e.preventDefault();
       }
@@ -350,21 +392,18 @@ export class App {
     /**
      * One pointer path for mouse, touch and pen.
      *
-     * Dragging paints: filling a run of five cells one tap at a time is the first thing
-     * that makes a nonogram tedious. The mark is decided by the cell the drag *started*
-     * on, so a drag across a mixed row does one consistent thing instead of toggling each
-     * cell to the opposite of whatever it happened to be.
-     */
-    /**
-     * A whole stroke is one undo step.
+     * Dragging paints, for tools that say they should — see `drag` on a tool. The mark is
+     * decided by the cell the drag *started* on, so a drag across a mixed row does one
+     * consistent thing instead of toggling each cell to the opposite of whatever it
+     * happened to be.
      *
-     * Five cells painted in one drag is five `play()` calls and one thing the player did.
-     * Without the bracket, undoing a twenty-cell stroke takes twenty presses — which the
-     * smoke test caught on the first run, by printing what undo actually restored instead
-     * of only whether it restored something.
+     * A whole stroke is one undo step. Five cells painted in one drag is five `play()`
+     * calls and one thing the player did; without the bracket, undoing a twenty-cell
+     * stroke takes twenty presses — which the smoke test caught on the first run of M1, by
+     * printing what undo actually restored instead of only whether it restored something.
      */
-    let painting: string | null = null;
-    const toCell = (e: PointerEvent): { col: number; row: number } | null => {
+    let painting: unknown = null;
+    const toCell = (e: PointerEvent): Cell | null => {
       if (!this.layout) return null;
       const rect = this.canvas.getBoundingClientRect();
       return cellAt(this.layout, e.clientX - rect.left, e.clientY - rect.top);
@@ -382,18 +421,25 @@ export class App {
       } catch {
         /* the pointer has already gone; painting still works without capture */
       }
-      const move = this.session.moveFor(cell, this.tool) as { mark: string } | null;
+      const move = this.session.moveFor(cell, this.tool);
       if (!move) return;
-      painting = move.mark;
-      this.session.beginChange(move.mark === 'empty' ? 'clearing cells' : 'filling cells');
+      const draggable = this.session.tools.find((t) => t.id === this.tool)?.drag === true;
+      painting = draggable ? move : null;
+      this.session.beginChange('your last move');
       this.session.play(move, 'a mark');
       this.afterMove();
+      if (!draggable) {
+        this.session.endChange();
+        this.afterMove();
+      }
     });
     this.canvas.addEventListener('pointermove', (e) => {
       if (painting === null || !this.session) return;
       const cell = toCell(e);
       if (!cell) return;
-      this.session.play({ ...cell, mark: painting }, 'marks');
+      // The move from the first cell, carried to this one. What "the same move" means is
+      // the puzzle's business; all this knows is that it has a cell and a thing to repeat.
+      this.session.play({ ...(painting as object), ...cell }, 'marks');
       this.afterMove();
     });
     const stop = (): void => {
@@ -407,9 +453,9 @@ export class App {
   }
 
   private syncTools(): void {
-    const module = this.session?.module ?? pictureLogic;
+    const tools = this.session?.tools ?? [];
     this.els.tools.innerHTML = '';
-    for (const tool of module.tools) {
+    for (const tool of tools) {
       const button = document.createElement('button');
       button.className = 'btn';
       button.dataset['act'] = 'tool';
@@ -421,47 +467,89 @@ export class App {
     }
   }
 
-  /** The spec the toolbar is currently describing. */
-  private chosenSpec(): PictureSpec {
-    const n = Number(this.els.size.value);
-    return {
-      kind: 'made',
-      rows: n,
-      cols: n,
-      tier: this.els.tier.value,
-      // A fresh seed each press, so "New puzzle" means a new puzzle rather than the same
-      // one again. Short on purpose: the whole code has to be writable on a whiteboard,
-      // and a timestamp-plus-random seed made it longer than the field it sits in. Four
-      // base-36 characters is 1.7 million puzzles per size and difficulty, which is more
-      // than a classroom will exhaust.
-      seed: Math.floor(Math.random() * 1_679_616).toString(36).padStart(4, '0'),
-    };
-  }
+  /**
+   * The help panel, written by the puzzle.
+   *
+   * Set as text and never as HTML. A puzzle module is trusted code today and may one day
+   * be a plug-in; either way there is nothing to gain from letting it put markup in the
+   * page, and the tool list is built from the same `help` strings the buttons already
+   * carry, so an explanation cannot drift from the control it describes.
+   */
+  private syncHelp(): void {
+    const session = this.session;
+    const body = this.els.helpBody;
+    body.innerHTML = '';
+    if (!session) return;
+    const module = session.module;
+    this.els.helpTitle.textContent = `How to play — ${module.name}`;
 
-  /** A spec as a short piece of text, and back. */
-  private static codeFor(spec: PictureSpec): string {
-    return spec.kind === 'drawn'
-      ? encodeGameId(pictureLogic.id, ['d', spec.picture])
-      : encodeGameId(pictureLogic.id, ['m', `${spec.cols}x${spec.rows}`, spec.tier, spec.seed]);
-  }
-
-  private static specFromCode(parts: readonly string[]): PictureSpec | null {
-    if (parts[0] === 'd' && parts[1]) return { kind: 'drawn', picture: parts[1] };
-    if (parts[0] === 'm' && parts[1] && parts[2] && parts[3]) {
-      const [cols, rows] = parts[1].split('x').map(Number);
-      if (!cols || !rows) return null;
-      return { kind: 'made', rows, cols, tier: parts[2], seed: parts[3] };
+    for (const paragraph of module.instructions) {
+      const p = document.createElement('p');
+      p.textContent = paragraph;
+      body.append(p);
     }
-    return null;
+
+    /**
+     * Tools that share an explanation share a line.
+     *
+     * A number puzzle has nine tools and one thing to say about them, and listing it nine
+     * times filled the panel with noise and pushed the demonstration button off the
+     * bottom. Found by looking at a screenshot of the panel, not by any assertion — which
+     * is the argument for looking.
+     */
+    const grouped = new Map<string, string[]>();
+    for (const tool of session.tools) {
+      const names = grouped.get(tool.help);
+      if (names) names.push(tool.name);
+      else grouped.set(tool.help, [tool.name]);
+    }
+    const list = document.createElement('ul');
+    for (const [help, names] of grouped) {
+      const li = document.createElement('li');
+      const name = document.createElement('b');
+      name.textContent = names.join(', ');
+      li.append(name, document.createTextNode(` — ${help}`));
+      list.append(li);
+    }
+    if (grouped.size > 0) body.append(list);
+
+    const described = session.describe();
+    const note = document.createElement('p');
+    note.className = 'help-note';
+    note.textContent = `This one is rated ${described.rating}. ${described.note}`;
+    body.append(note);
+
+    if (module.demoSpec) {
+      const actions = document.createElement('div');
+      actions.className = 'ch-actions';
+      const button = document.createElement('button');
+      button.className = 'btn on';
+      button.dataset['act'] = 'demo';
+      button.title = 'Watch the app solve a small one, a step at a time';
+      button.textContent = 'Show me — watch a puzzle being solved';
+      actions.append(button);
+      body.append(actions);
+    }
+
+    const row = document.createElement('label');
+    row.className = 'set-row';
+    row.title = 'What happens when a puzzle is finished';
+    row.append(document.createTextNode('Finishing'));
+    row.append(this.celebrateSelect);
+    body.append(row);
   }
 
   private async start(): Promise<void> {
     const fromUrl = location.hash.replace(/^#/, '');
     if (fromUrl) {
       const decoded = decodeGameId(fromUrl);
-      const spec = decoded && MODULES[decoded.puzzleId] ? App.specFromCode(decoded.parts) : null;
-      if (spec) {
-        await this.newPuzzle(spec);
+      const module = decoded ? BY_ID[decoded.puzzleId] : undefined;
+      const spec = module && decoded ? module.decode(decoded.parts) : null;
+      if (module && spec) {
+        this.chooser = module;
+        this.els.puzzle.value = module.id;
+        this.syncOptions();
+        await this.newPuzzle(module, spec);
         return;
       }
       this.setStatus('That code is not one this app recognises, so a new puzzle was opened instead.');
@@ -474,31 +562,43 @@ export class App {
         return;
       }
     }
-    await this.newPuzzle({ kind: 'drawn', picture: 'heart' });
+    /**
+     * A first launch opens the puzzle's small fixed board, not one from the dropdowns.
+     *
+     * Deliberately the same board the demonstration uses. The first thing somebody meets
+     * should be finishable in a few minutes — a hand-drawn heart, or a 4x4 — rather than
+     * whatever the difficulty dropdown happened to be left on, and making it the *same*
+     * board means pressing "Show me" demonstrates the puzzle already in front of them.
+     */
+    await this.newPuzzle(this.chooser, this.chooser.demoSpec?.() ?? this.chosenSpec());
   }
 
-  private async newPuzzle(spec: PictureSpec): Promise<void> {
+  private async newPuzzle(module: AnyPuzzleModule, spec: unknown): Promise<void> {
     /**
      * Say something before the search, because the search is not instant.
      *
-     * Generation is a search, and measured on a desktop it ranges from under a
-     * millisecond for a gentle 10x10 to about 775ms for a tricky 20x20 — which on a
-     * tablet is comfortably long enough to look like the app has died. One frame is
-     * yielded so the message actually paints before the main thread is taken.
+     * Generation is a search. Measured on a desktop it ranges from under a millisecond to
+     * about 775ms for a tricky 20x20 nonogram and about 360ms for a tricky 9x9 number
+     * board — which on a tablet is comfortably long enough to look like the app has died.
+     * One frame is yielded so the message actually paints before the main thread is taken.
      *
-     * This is a courtesy, not a fix: the thread is still blocked while it runs. The fix
-     * is a worker, and it is recorded as a known limitation rather than pretended away.
+     * This is a courtesy, not a fix: the thread is still blocked while it runs. The fix is
+     * a worker, and it is recorded as a known limitation rather than pretended away. Both
+     * puzzles have the same problem, which makes the worker a mid-end job rather than a
+     * per-puzzle one — worth knowing before it is built.
      */
-    this.setStatus('Making a picture\u2026');
+    this.setStatus('Making a puzzle…');
     await new Promise((resolve) => requestAnimationFrame(resolve));
 
-    const module = pictureLogic;
-    const session = Session.create(module, spec, undefined, { onChange: () => (this.dirty = true) });
+    const normalised = module.normalise(spec);
+    const session = Session.create(module, normalised, undefined, {
+      onChange: () => (this.dirty = true),
+    });
     const record: PuzzleRecord = {
       id: newId(),
       puzzleId: module.id,
-      spec,
-      title: (session.puzzle as { title: string }).title,
+      spec: normalised,
+      title: session.title,
       state: session.serialise(),
       createdAt: Date.now(),
       lastPlayed: Date.now(),
@@ -513,29 +613,25 @@ export class App {
   /**
    * Today's puzzle, with no server behind it.
    *
-   * The date *is* the seed, so every device generates the same picture from the same
+   * The date *is* the seed, so every device generates the same puzzle from the same
    * arithmetic. No backend, no sync, nothing to go down — and it still works on a tablet
    * in a classroom with the wifi off.
    */
   private async openDaily(): Promise<void> {
-    const seed = dailySeed();
-    await this.newPuzzle({
-      kind: 'made',
-      rows: Number(this.els.size.value),
-      cols: Number(this.els.size.value),
-      tier: this.els.tier.value,
-      seed,
-    });
-    this.setStatus(`Today's puzzle. Everyone who picks this size and difficulty gets the same one.`);
+    await this.newPuzzle(this.chooser, this.chosenSpec(dailySeed()));
+    this.setStatus(
+      `Today's puzzle. Everyone who picks these choices gets the same one — unless the ` +
+        `choice made ignores the seed, such as a hand-drawn starter, which is the same every day.`,
+    );
   }
 
   private openRecord(record: PuzzleRecord): void {
-    const module = MODULES[record.puzzleId];
+    const module = BY_ID[record.puzzleId];
     if (!module) {
       this.setStatus(`That puzzle was made by "${record.puzzleId}", which this version does not have.`);
       return;
     }
-    const session = Session.create(module, record.spec, record.state, {
+    const session = Session.create(module, module.normalise(record.spec), record.state, {
       onChange: () => (this.dirty = true),
     });
     this.install(session, record);
@@ -547,20 +643,20 @@ export class App {
     this.clearHint();
     this.hideCelebration();
     this.hintsUsed = record.hintsUsed ?? 0;
-    this.tool = session.module.tools[0]?.id ?? 'fill';
+    this.tool = session.tools[0]?.id ?? '';
     setLastOpened(record.id);
-    this.els.code.value = App.codeFor(normaliseSpec(record.spec));
+    this.els.code.value = App.codeFor(session.module, record.spec);
+    // The type picker follows the open puzzle; the per-puzzle choices do not, because a
+    // spec cannot be read back into them. Known limitation, recorded in ARCHITECTURE.md.
+    if (this.chooser.id !== session.module.id) {
+      this.chooser = session.module;
+      this.els.puzzle.value = session.module.id;
+      this.syncOptions();
+    }
     this.syncTools();
+    this.syncHelp();
     this.syncHistory();
     this.updateStatus();
-    const puzzle = session.puzzle as { rows: number; cols: number; tierUsed: number };
-    this.els.helpNote.textContent =
-      `This one is ${puzzle.cols} by ${puzzle.rows}, and rated ${tierName(puzzle.tierUsed)} — ` +
-      (puzzle.tierUsed <= 1
-        ? 'every step can be found by looking at one line at a time.'
-        : puzzle.tierUsed === 2
-          ? 'some steps need you to think about all the ways a line could fit.'
-          : 'a few steps need you to suppose a square is filled and see what goes wrong.');
     this.dirty = true;
   }
 
@@ -582,27 +678,25 @@ export class App {
   /**
    * Help, in three strengths.
    *
-   * Press once and the line to look at is highlighted and nothing more. Press again and it
-   * says why. Press a third time and it does it. Each press is a decision to be told more,
-   * and a child who only ever needs the first one never sees the answer.
+   * Press once and the part of the board to look at is highlighted and nothing more. Press
+   * again and it says why. Press a third time and it does it. Each press is a decision to
+   * be told more, and a child who only ever needs the first one never sees the answer.
    *
-   * A wrong board short-circuits all of it — see `pictureLogic.hint()` for why that has to
-   * come first.
+   * A wrong board short-circuits all of it: a deduction offered to somebody whose board is
+   * already wrong is a deduction from a false premise.
    */
   private askHint(): void {
     const session = this.session;
     if (!session) return;
-    const module = session.module;
-    if (!module.hint) {
+    const hint = session.hint(3);
+    if (!hint) {
       this.setStatus('This puzzle cannot give hints.');
       return;
     }
 
-    const hint = module.hint(session.puzzle, (session as unknown as { state: unknown }).state, 3);
-
     if (hint.kind === 'wrong') {
       this.hintsUsed++;
-      this.hintCells = lineCells(session, hint.line);
+      this.hintCells = hint.look;
       this.hintLevel = 2;
       this.els.hint.textContent = 'Hint';
       this.setStatus(hint.why);
@@ -619,11 +713,9 @@ export class App {
     this.hintLevel++;
     if (this.hintLevel === 1) {
       this.hintsUsed++;
-      this.hintCells = step.line ? lineCells(session, step.line) : step.cells;
+      this.hintCells = lookCells(step);
       this.els.hint.textContent = 'Why?';
-      const where = step.line
-        ? `${step.line.axis === 'row' ? 'Row' : 'Column'} ${step.line.index + 1}`
-        : 'This part of the board';
+      const where = step.where ?? 'This part of the board';
       this.setStatus(`${where} has something you can work out. Have a look before pressing again.`);
     } else if (this.hintLevel === 2) {
       this.hintCells = step.cells;
@@ -642,7 +734,17 @@ export class App {
     this.dirty = true;
   }
 
+  /**
+   * Undo clears the open hint as well as the move.
+   *
+   * Found by the smoke test for the second puzzle, which asked for a hint, undid a move,
+   * and got "Do it" where it expected "where to look". The step itself is always recomputed
+   * from the current board, so nothing wrong was ever done — but the *ladder* was two
+   * presses in, so one press gave away the answer to somebody who had asked for a nudge.
+   * An undo changes the board, which is exactly the reason `afterMove` clears it too.
+   */
   private undo(): void {
+    this.clearHint();
     const label = this.session?.undo();
     this.setStatus(label === null || label === undefined ? 'There is nothing to undo.' : `Undid: ${label}.`);
     this.syncHistory();
@@ -651,6 +753,7 @@ export class App {
   }
 
   private redo(): void {
+    this.clearHint();
     const label = this.session?.redo();
     this.setStatus(label === null || label === undefined ? 'There is nothing to redo.' : `Redid: ${label}.`);
     this.syncHistory();
@@ -673,12 +776,13 @@ export class App {
   }
 
   private updateStatus(): void {
-    if (!this.session) return;
-    // The difficulty the solver actually needed, not the one asked for. A 10x10 asked for
+    const session = this.session;
+    if (!session) return;
+    // The difficulty the solver actually needed, not the one asked for. A puzzle asked for
     // at Tricky that turned out to be Steady is a Steady puzzle, and saying otherwise
     // would be the app flattering itself.
-    const rated = tierName((this.session.puzzle as { tierUsed: number }).tierUsed);
-    if (this.session.solved) {
+    const described = session.describe();
+    if (session.solved) {
       // What it took is part of what happened. A finish that leaned on help is still a
       // finish, and quietly not mentioning it would make the record flattering rather
       // than true.
@@ -686,10 +790,12 @@ export class App {
         this.hintsUsed === 0
           ? ' No hints.'
           : ` With ${this.hintsUsed} hint${this.hintsUsed === 1 ? '' : 's'}.`;
-      this.setStatus(`Finished — ${this.record?.title ?? 'the picture'} is complete.${helped}`);
+      this.setStatus(`Finished — ${session.title} is complete.${helped}`);
       return;
     }
-    this.setStatus(`${rated} · ${Math.round(this.session.progress * 100)}% of the picture filled in`);
+    this.setStatus(
+      `${described.rating} · ${Math.round(session.progress * 100)}% of ${described.progressNoun}`,
+    );
   }
 
   private setStatus(text: string): void {
@@ -717,10 +823,14 @@ export class App {
       // Here rather than in `updateStatus`, because this is the one place that knows the
       // puzzle has *just* become complete. `updateStatus` runs on every change and would
       // throw the squares into the air every time a finished board was touched.
-      const puzzle = session.puzzle as { rows: number; cols: number; tierUsed: number };
+      // The title already carries the difficulty, so the rating is not repeated here. It
+      // read "4x4 Gentle, Gentle, with no hints." until somebody looked at the screenshot,
+      // which no assertion was ever going to catch.
       this.celebrate(
-        `${puzzle.cols} by ${puzzle.rows}, ${tierName(puzzle.tierUsed)}` +
-          (this.hintsUsed === 0 ? ', with no hints.' : `, with ${this.hintsUsed} hint${this.hintsUsed === 1 ? '' : 's'}.`),
+        session.title +
+          (this.hintsUsed === 0
+            ? ', with no hints.'
+            : `, with ${this.hintsUsed} hint${this.hintsUsed === 1 ? '' : 's'}.`),
       );
     }
     try {
@@ -742,13 +852,15 @@ export class App {
         ? 'Finished'
         : `${Math.round(record.progress * 100)}% done`;
       card.innerHTML = `<div class="lib-meta"><div class="lib-title"></div>
-        <div class="lib-sub">${record.puzzleId} · ${state}</div></div>
+        <div class="lib-sub"></div></div>
         <div class="lib-actions">
           <button class="btn lib-open">Open</button>
           <button class="btn lib-delete">Delete</button>
         </div>`;
       // Title as text, never as HTML: it comes from a puzzle module and later from a user.
       card.querySelector<HTMLElement>('.lib-title')!.textContent = record.title;
+      card.querySelector<HTMLElement>('.lib-sub')!.textContent =
+        `${BY_ID[record.puzzleId]?.name ?? record.puzzleId} · ${state}`;
       card.querySelector('.lib-open')!.addEventListener('click', () => {
         this.openRecord(record);
         this.els.library.hidden = true;
@@ -761,19 +873,56 @@ export class App {
     this.els.library.hidden = false;
   }
 
-
   // --- Finishing -------------------------------------------------------------
+
+  /** Built once and moved into the help panel each time it is rebuilt. */
+  private buildCelebrateSetting(): HTMLSelectElement {
+    const select = document.createElement('select');
+    select.className = 'set-celebrate';
+    for (const choice of [
+      { value: 'full', label: 'Squares and a sound' },
+      { value: 'quiet', label: 'Squares, no sound' },
+      { value: 'off', label: 'Nothing' },
+    ]) {
+      const option = document.createElement('option');
+      option.value = choice.value;
+      option.textContent = choice.label;
+      select.append(option);
+    }
+    try {
+      const saved = localStorage.getItem('ops:celebrate');
+      if (saved === 'off' || saved === 'quiet' || saved === 'full') this.celebration = saved;
+    } catch {
+      /* storage disabled; it simply starts at full next time */
+    }
+    select.value = this.celebration;
+    select.addEventListener('change', () => {
+      this.celebration = select.value as CelebrationLevel;
+      try {
+        localStorage.setItem('ops:celebrate', this.celebration);
+      } catch {
+        /* storage disabled */
+      }
+      // Shown rather than described: nobody can picture "squares and a sound" from a
+      // dropdown, and the alternative is finishing a puzzle to find out.
+      if (this.celebration !== 'off') this.celebrate('A taste of it.');
+    });
+    this.els.finishBanner.querySelector('.finish-close')?.addEventListener('click', () => {
+      this.hideCelebration();
+    });
+    return select;
+  }
 
   /** See `celebrate.ts`. The flash-safety and reduced-motion rules came with it. */
   private celebrate(detail: string | null): void {
-    const cells = (this.session?.puzzle as { rows: number; cols: number } | undefined) ?? {
-      rows: 10,
-      cols: 10,
-    };
+    // From the scene, which every puzzle has, rather than from the puzzle, which the shell
+    // would have to cast to read.
+    const scene = this.session?.layout();
+    const squares = scene ? scene.rows * scene.cols : 100;
     const reduced =
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const plan = celebrationPlan(cells.rows * cells.cols, this.celebration, reduced);
+    const plan = celebrationPlan(squares, this.celebration, reduced);
     if (!plan) return;
 
     this.stopCelebration?.();
@@ -800,7 +949,7 @@ export class App {
   // --- Paper -----------------------------------------------------------------
 
   /**
-   * The puzzle on A4, with the numbers and an empty grid.
+   * The puzzle on A4, with the clues and an empty grid.
    *
    * Printed from an iframe rather than a popup, for the reason the sister project
    * recorded: a window is blocked often enough to be unreliable, and when it is blocked
@@ -809,16 +958,12 @@ export class App {
   private printSheet(): void {
     const session = this.session;
     if (!session) return;
-    const module = session.module;
-    if (!module.printable) {
+    const scene = session.printable();
+    if (!scene) {
       this.setStatus('This puzzle cannot be printed.');
       return;
     }
-    const html = sheetHtml(
-      module.printable(session.puzzle),
-      (session.puzzle as { title: string }).title,
-      this.els.code.value,
-    );
+    const html = sheetHtml(scene, session.title, this.els.code.value, session.module.blurb);
     const frame = document.createElement('iframe');
     frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -835,7 +980,7 @@ export class App {
     frame.contentWindow.focus();
     frame.contentWindow.print();
     setTimeout(() => frame.remove(), 60_000);
-    this.setStatus('Sheet sent to your printer — the numbers and an empty grid, not the answer.');
+    this.setStatus('Sheet sent to your printer — the puzzle and an empty grid, not the answer.');
   }
 
   // --- The demonstration -----------------------------------------------------
@@ -843,16 +988,20 @@ export class App {
   /**
    * Show somebody what to do, by doing it.
    *
-   * Runs on its own puzzle — a small hand-drawn one, always the same, so a teacher can
-   * talk about it — and puts the player's own puzzle back when it finishes. The board is
-   * deaf to the pointer while it runs: a demonstration you can interfere with is a
-   * demonstration that ends up in a state nobody intended.
+   * Runs on the puzzle's own small fixed instance — `demoSpec()`, so a teacher can talk
+   * about the same board every time — and puts the player's own puzzle back when it
+   * finishes. The board is deaf to the pointer while it runs: a demonstration you can
+   * interfere with is a demonstration that ends up in a state nobody intended.
    */
   private async startDemo(): Promise<void> {
     this.els.help.hidden = true;
+    const module = this.session?.module ?? this.chooser;
+    const spec = module.demoSpec?.();
+    if (spec === undefined) {
+      this.setStatus('This puzzle has nothing to demonstrate.');
+      return;
+    }
     const previous = this.record;
-    const module = pictureLogic;
-    const spec: PictureSpec = { kind: 'drawn', picture: 'heart' };
     const session = Session.create(module, spec, undefined, {
       onChange: () => (this.dirty = true),
     });
@@ -935,7 +1084,7 @@ export class App {
     this.els.demoPause.textContent = 'Pause';
     this.hintCells = [];
     if (returnTo) this.openRecord(returnTo);
-    else void this.newPuzzle({ kind: 'drawn', picture: 'heart' });
+    else void this.newPuzzle(this.chooser, this.chosenSpec());
   }
 
   private loop = (): void => {
@@ -957,19 +1106,4 @@ export class App {
     }
     requestAnimationFrame(this.loop);
   };
-}
-
-
-/** Every cell of a row or column, for the "where to look" highlight. */
-function lineCells(
-  session: Session,
-  line: { axis: 'row' | 'col'; index: number },
-): { col: number; row: number }[] {
-  const scene = session.layout();
-  const n = line.axis === 'row' ? scene.cols : scene.rows;
-  const out: { col: number; row: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    out.push(line.axis === 'row' ? { col: i, row: line.index } : { col: line.index, row: i });
-  }
-  return out;
 }

@@ -369,6 +369,27 @@ function cellOf(axis: 'row' | 'col', index: number, i: number): Cell {
 const LINE_NAME = { row: 'row', col: 'column' } as const;
 
 /**
+ * Every cell of a line, as cells.
+ *
+ * A step used to carry `{ axis, index }` and leave the shell and the demonstration to work
+ * the cells out from it. Both of them did, identically, and both of them therefore knew
+ * how a grid is laid out — which is puzzle knowledge in the front end. The second puzzle
+ * made the leak impossible to keep, because its deductions are about boxes and a box is
+ * neither a row nor a column. So the puzzle hands over the cells it means.
+ */
+export function lineCellsOf(grid: Grid, axis: 'row' | 'col', index: number): Cell[] {
+  const n = axis === 'row' ? grid.cols : grid.rows;
+  const out: Cell[] = [];
+  for (let i = 0; i < n; i++) out.push(cellOf(axis, index, i));
+  return out;
+}
+
+/** "Row 4", "Column 11". For the status line, so it needs its capital. */
+export function lineCap(axis: 'row' | 'col', index: number): string {
+  return `${axis === 'row' ? 'Row' : 'Column'} ${index + 1}`;
+}
+
+/**
  * Solve as far as the given tier allows.
  *
  * Passes over every row and column until nothing changes. `maxSteps` is a safety rail for
@@ -402,7 +423,8 @@ export function solveGrid(
           tier,
           cells: result.changed.map((i) => cellOf(axis, index, i)),
           why: `Look at ${LINE_NAME[axis]} ${index + 1}. ${result.why}`,
-          line: { axis, index },
+          look: lineCellsOf(grid, axis, index),
+          where: lineCap(axis, index),
           moves: result.changed.map((i) => ({
             ...cellOf(axis, index, i),
             mark: result.line[i] === FILLED ? 'filled' : 'crossed',
@@ -509,7 +531,8 @@ export function nextStep(
           tier,
           cells: result.changed.map((i) => cellOf(axis, index, i)),
           why: `Look at ${LINE_NAME[axis]} ${index + 1}. ${result.why}`,
-          line: { axis, index },
+          look: lineCellsOf(grid, axis, index),
+          where: lineCap(axis, index),
           moves: result.changed.map((i) => ({
             ...cellOf(axis, index, i),
             mark: result.line[i] === FILLED ? 'filled' : 'crossed',
@@ -527,7 +550,8 @@ export function nextStep(
       const at = step.cells[0]!;
       return {
         ...step,
-        line: { axis: 'row', index: at.row },
+        look: lineCellsOf(grid, 'row', at.row),
+        where: lineCap('row', at.row),
         moves: [{ ...at, mark: trial[at.row * grid.cols + at.col] === FILLED ? 'filled' : 'crossed' }],
       };
     }

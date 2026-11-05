@@ -20,6 +20,13 @@ Carried over from Open Jigsaw Studio, where most of them were learned the expens
    no puzzle. `src/puzzles/<name>/` is a back-end and knows no shell. `src/shell/` is the
    front-end and knows no puzzle. If a line in the shell mentions a clue, a run or a digit,
    the seam has leaked and that is the bug.
+5a. **A layering rule with one implementation has not been tested.** From M1 to M4 the
+   shell carried a comment saying it knew nothing about nonograms while importing the
+   nonogram module and hard-coding its sizes, its codes, its help text and its tools —
+   fourteen places, none of them visible, because there was nothing to compare against.
+   When the shell has to do something a puzzle has not told it, the fix is a question the
+   interface cannot yet ask, **not** a cast and a special case. `puzzle as { title }` is
+   the shape that mistake takes.
 6. **`src/core/` and `src/puzzles/` must run in Node with no DOM**, no `canvas`, no
    `window`. If a test of either needs jsdom, the boundary has leaked. This is what makes
    the app testable at all.

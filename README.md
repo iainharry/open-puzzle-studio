@@ -6,14 +6,25 @@ Sister project to [Open Jigsaw Studio](https://github.com/iainharry/open-jigsaw-
 and built on the parts of it that turned out to be about *playing a puzzle* rather than
 about jigsaws.
 
-**Status: M4.** Generated puzzles at three real difficulties, solvable by reasoning, with
-a shareable code and a daily puzzle that needs no server. Hints in three strengths — where
-to look, why, then do it — and a board that has gone wrong is reported as wrong rather
-than deduced from. A **demonstration** in which the app solves a small puzzle in front of
-you, a step at a time. Printing to A4. A finish worth noticing.
+**Status: M5.** **Two puzzle types**, and one shell that has never heard of either.
+*Picture Logic* (nonograms) and *Number Place* (a Latin square with boxes, 4×4 to 9×9, in
+numbers or in shapes for a child who cannot read numbers yet). Both are generated at three
+real difficulties, solvable by reasoning with no guessing, and rated by **which deductions
+the solver needed** rather than by how many clues are showing. Both have a shareable code,
+a daily puzzle that needs no server, hints in three strengths — where to look, why, then
+do it — a board that has gone wrong reported as wrong rather than deduced from, a
+**demonstration** in which the app solves a small one in front of you a step at a time,
+printing to A4, and a finish worth noticing.
 
-Still to come: pictures made from your own images, and a second puzzle type — both
-after somebody has been watched playing this one.
+M5 was supposed to be pictures made from your own images. It is a second puzzle type
+instead, because the plan's own risk register said the interface was the bet and that
+finding the mistake while there are two puzzles is the cheap insurance. It was right: the
+shell turned out to have been quietly doing nonogram work in fourteen places, and
+`PuzzleModule` was missing seven things. See `ARCHITECTURE.md` §11.
+
+Still to come: pictures made from your own images, a worker so generation stops blocking
+the screen, and a third puzzle type — none of them before somebody has been watched
+playing these two.
 
 ## Why this exists when Simon Tatham's collection already does
 
@@ -47,7 +58,11 @@ the most expensive thing a collection app can do.
 **The whole app talks to a puzzle through one interface**, `PuzzleModule` in
 `src/core/types.ts`. The keystone of it is `solve()`, which reports *which deductions it
 needed* rather than only whether it won — one function that buys generation, honest
-difficulty and honest hints.
+difficulty, honest hints, and uniqueness for free in both puzzles.
+
+That interface was drafted against two puzzles on paper and was still wrong in seven
+places, every one of them invisible while there was only one back end. Writing the second
+puzzle is what found them; the list and the reasons are at the top of `src/core/types.ts`.
 
 ## Running it
 

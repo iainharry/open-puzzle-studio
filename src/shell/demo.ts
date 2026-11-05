@@ -21,7 +21,7 @@
  * teaches nothing.
  */
 
-import type { AnyPuzzleModule, Cell } from '../core/index.js';
+import { lookCells, type AnyPuzzleModule, type Cell } from '../core/index.js';
 
 export interface Beat {
   /** What to say while this beat is on screen. */
@@ -63,7 +63,10 @@ export function buildScript(
 
     beats.push({
       caption: step.why,
-      look: step.line ? lineOf(module, puzzle, step.line) : step.cells,
+      // The puzzle says which squares its reasoning is about. This file used to work them
+      // out from an axis and an index, which meant the demonstration knew how a grid is
+      // laid out — fine for one puzzle, wrong the moment a deduction was about a box.
+      look: lookCells(step),
       moves,
       cells: step.cells,
     });
@@ -78,20 +81,6 @@ export function buildScript(
     finishes = true;
   }
   return { beats, finishes };
-}
-
-function lineOf(
-  module: AnyPuzzleModule,
-  puzzle: unknown,
-  line: { axis: 'row' | 'col'; index: number },
-): Cell[] {
-  const scene = module.layout(puzzle, module.start(puzzle));
-  const n = line.axis === 'row' ? scene.cols : scene.rows;
-  const out: Cell[] = [];
-  for (let i = 0; i < n; i++) {
-    out.push(line.axis === 'row' ? { col: i, row: line.index } : { col: line.index, row: i });
-  }
-  return out;
 }
 
 /** How long each phase of a beat lasts. Slow enough to follow; a demo is not a speed run. */

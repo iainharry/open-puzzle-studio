@@ -250,26 +250,152 @@ scaled to A4 is soft exactly where the numbers are. It is also a few kilobytes o
 instead of a megabyte of pixels. The test counts what is in the sheet — twelve lines, every
 clue, and **zero filled shapes**.
 
-## 11. Decisions deliberately deferred
+## 11. The second puzzle, and what it found (M5)
+
+The plan's M5 was pictures — nonograms generated from a photograph. It was not built, and
+the reason is in the plan's own risk register: *"the cheap insurance is M6 arriving early
+enough that the mistake is found while there are two puzzles rather than six."* Pictures
+are a feature on the puzzle that already exists and test nothing architectural; they are
+also the most expensive milestone, because a solve-and-perturb loop multiplies a generation
+cost that already blocks the main thread. So M5 is the second puzzle type, **Number
+Place** — a Latin square with boxes — and the finding is the point of it.
+
+### The shell was not puzzle-agnostic, and nothing could tell
+
+`src/shell/app.ts` carried this comment from M1 to M4:
+
+> It knows about `PuzzleModule`, `Session` and `Scene`, and nothing about nonograms. If a
+> line in this file ever mentions a clue, a run or a picture, the seam this milestone
+> exists to prove has leaked and that is the bug.
+
+By M4 the file imported the nonogram module directly and mentioned pictures, clues and runs
+in fourteen places: a hard-coded size list `[5, 7, 8, 10, 12, 15, 20]` offered to every
+puzzle; a "Starter" dropdown built from the nonogram's hand-drawn pictures; `codeFor` and
+`specFromCode`, which knew the shape of a nonogram spec; `chosenSpec(): PictureSpec`; a
+help panel written in HTML about runs and crossing out; "% of the picture filled in"; the
+demonstration's puzzle named inline as `{ kind: 'drawn', picture: 'heart' }`; the space key
+swapping between the literal strings `'fill'` and `'cross'`; and `puzzle as { rows, cols,
+tierUsed, title }` four times over, because the interface had no way to ask.
+
+None of it was visible, because the only puzzle that existed was a nonogram. **A layering
+rule with one implementation is a layering rule that has not been tested.**
+
+### What `PuzzleModule` was missing
+
+Seven things, each one a need rather than a convenience — the bar being "the shell cannot
+render a second puzzle without it". The full list with reasons is at the top of
+`src/core/types.ts`; in brief:
+
+| Was | Is | Because |
+| --- | --- | --- |
+| `readonly tools` | `tools(puzzle)` | Its tools are its digits: four on a 4×4, nine on a 9×9 |
+| *(nothing)* | `options()` + `specFrom()` | The puzzle says what it offers; the shell renders it |
+| *(nothing)* | `encode()` / `decode()` / `normalise()` | Codes were built by the shell from a nonogram spec |
+| *(nothing)* | `title()` / `describe()` / `instructions` | All of these were casts and hard-coded HTML |
+| `SolveStep.line` | `look` + `where` | Its deductions are about **boxes**, which are neither rows nor columns |
+| `Scene.band: number` | `{ col, row }` | A 6×6's boxes are 2 tall and 3 wide |
+| `Mark` | gains `'shaded'` | Half its squares are fixed by the puzzle; nothing in a nonogram is |
+
+The interface went from 15 members to 24. The shell is about the same length as before,
+which is the honest outcome: the work did not vanish, it moved to where it belongs.
+Replacing `SolveStep.line` with `look` *deleted* code — the shell and the demonstration
+were each reconstructing a line's cells from an axis and an index, which is grid knowledge
+neither had any business holding.
+
+### The solver, again from the other end
+
+Three tiers, each a kind of looking rather than a list of patterns, and each explainable to
+a child in one sentence:
+
+1. **Gentle** — one empty square left in a line, or one number left for a square.
+2. **Steady** — this number can only go in one square of this box.
+3. **Tricky** — suppose a number goes here, follow it, find that something breaks.
+
+No naked pairs, no pointing pairs, no X-wings. They are *elimination* techniques: they rule
+a number out without putting one in, and a player with no way to write "not a 7 here"
+cannot use such a hint at all. Probing at tier 3 covers most of their effect and only
+reports a result it can act on. The cost is stated rather than hidden: tier 3 here is
+weaker than a full-strength Sudoku solver, so the difficulty labels are conservative.
+
+Uniqueness comes free, by the same argument as the nonogram: every deduction is forced, so
+a board the solver finishes by reasoning alone has exactly one answer. The generator never
+checks it — and `countSolutions()` exists only so the **tests** can verify that claim by
+exhaustive search rather than believing it.
+
+### Measured, not assumed
+
+Generation on a desktop, five runs each, and how often the requested tier was reached:
+
+```
+4x4 Gentle     0ms  5/5      6x6 Gentle    1ms  5/5      9x9 Gentle    9ms  5/5
+4x4 Steady     3ms  0/5      6x6 Steady    3ms  5/5      9x9 Steady   12ms  5/5
+4x4 Tricky     5ms  0/5      6x6 Tricky   35ms  2/5      9x9 Tricky  356ms  5/5
+```
+
+A 4×4 is always Gentle, whatever is asked for: there is not enough room for a contradiction
+proof to be *necessary*. The app reports the difficulty it reached, never the one requested
+— the same honesty the nonogram generator already owed.
+
+### What looking at the picture caught, again
+
+Three things no assertion was going to find, all from screenshots:
+
+- The finish banner read "4×4 Gentle, **Gentle**, with no hints." The title already carries
+  the rating.
+- The How to play panel listed nine tools with nine near-identical explanations, filling
+  the panel and pushing the demonstration button below the fold. Tools that share an
+  explanation now share a line.
+- Two smoke checks were weaker than they looked: navigating to a URL that differs only in
+  its fragment does not reload the page, so "a code opens the puzzle it names" was reading
+  back a field nobody had changed. Both now reload explicitly.
+
+And one real bug the second puzzle's smoke run found in shared code: **Undo did not clear
+an open hint**, so pressing Hint twice, Undo, then Hint once gave away the answer to
+somebody who had asked for a nudge.
+
+## 12. Decisions deliberately deferred
 
 - **Cell size has no upper bound.** A 5×5 fills a desktop screen at 109px per cell, which
   looks odd to an adult and may be exactly right for a five-year-old on a tablet. Capping
   it would be inventing a number at a desk, which this project has a record of regretting.
   It is a playtest question.
 - **22px minimum cell** is likewise a guess and is labelled as one in `render/scene.ts`.
-- **Printing, assistance levels, a generated guide and the celebration** are all M4 and
-  all largely copied from the jigsaw app; none of them is interesting until there is a real
-  puzzle to print.
+- **Pencil marks**, and with them the second sticky input mode a number puzzle wants.
+  Adults solving a 9×9 want to note "this could be a 3 or a 7". The shell has exactly one
+  tool in hand at a time, and inventing a second dimension now would mean designing it
+  against one puzzle — which is the mistake this milestone exists to undo. The children
+  this app is for play 4×4 and 6×6, where notes are not needed. It is the first thing to
+  look at if a third puzzle wants the same thing, because then it is a mid-end feature
+  rather than a guess.
+- **Assistance levels.** The hints already are the assistance, in three strengths. A
+  separate "show me my mistakes" switch would make a different, easier puzzle and is worth
+  having only if a teacher asks for it.
+- **A generated guide.** The jigsaw app generates one from its live toolbar because it has
+  sixty controls. This has about twelve, and How to play is now written by whichever puzzle
+  is open. A teacher's guide is worth writing after watching a lesson, not before.
 
-## 12. Known limitations
+## 13. Known limitations
 
-- **Generation blocks the UI.** Up to ~775ms measured for a tricky 20x20, and more on a
-  tablet. Wants a worker.
-- **Large boards cannot be Gentle.** The app falls back and reports honestly, but a person
-  who asks for 20x20 Gentle will not get it. Explaining *why* in the app is M4's job.
+- **Generation blocks the UI.** Up to ~775ms for a tricky 20×20 nonogram and ~356ms for a
+  tricky 9×9 number board, measured on a desktop; more on a tablet. Wants a worker — and
+  now that both puzzles have the problem, the worker is a mid-end job rather than a
+  per-puzzle one, which is worth knowing before it is built.
+- **Difficulty cannot always be delivered.** A 20×20 nonogram cannot be Gentle; a 4×4
+  number board cannot be anything but. The app falls back and reports what it got, but it
+  does not explain in advance which combinations are impossible.
+- **The per-puzzle dropdowns do not follow the open puzzle.** Opening a saved board sets
+  the puzzle-type picker but leaves Size and Difficulty where they were, because a spec
+  cannot be read back into a set of choices. The Code field and the status line both show
+  the truth.
+- **No pencil marks**, so a 9×9 at Tricky is a paper puzzle. Print exists.
+- **Broken-board detection is honest, not complete.** It reports a repeat in a line or a
+  line with nowhere left for a number. A single wrong entry that breaks nothing *yet* is
+  not caught, in either puzzle, because the check never consults the answer — a hint here
+  is reasoning the player could have done, not a look at the back of the book.
 - **Hint counting is per puzzle, not per session.** Reopening a puzzle keeps the count,
   which is right, but there is no way to see it other than on finishing.
-- **No printing, no guide, no assistance levels, no celebration.** M4.
+- **Nothing has been watched being played.** Two apps, twenty-nine milestones, no
+  playtest. Every claim about what a child finds easy is a belief.
 
 ## Dependencies
 

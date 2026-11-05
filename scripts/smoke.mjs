@@ -91,6 +91,11 @@ const opening = await page.evaluate(() => {
       (el) => !el.getAttribute('title'),
     ).length,
     hasHelp: !!document.querySelector('[data-act="help"]'),
+    // The toolbar's per-puzzle choices are built from what the module says it offers. The
+    // shell used to own this list, which is how one nonogram's sizes came to be offered to
+    // every puzzle that might ever be written.
+    choices: [...document.querySelectorAll('[data-choice]')].map((s) => s.dataset.choice),
+    puzzles: [...document.querySelectorAll('.puzzle option')].map((o) => o.textContent),
   };
 });
 check('the board paints something', opening.colours > 2, `${opening.colours} colour buckets`);
@@ -99,6 +104,8 @@ check('a 5x5 grid with a clue margin is laid out', opening.rows === 5 && opening
 // render/scene.ts, and is one of the things the first playtest is for.
 check('and the cells are big enough to press', opening.cell >= 22, `${opening.cell}px cells`);
 check('the shell got its tools from the module, not from itself', opening.tools.join(',') === 'Fill,Cross out', opening.tools.join(', '));
+check('and its choices too', opening.choices.join(',') === 'size,tier', opening.choices.join(', '));
+check('and it offers both puzzle types', opening.puzzles.join(',') === 'Picture Logic,Number Place', opening.puzzles.join(', '));
 // Every control says what it does. Tooltips are the desktop half of that and a tablet
 // gets none of them, which is why How to play is a button and not only a hover.
 check('every control in the toolbar explains itself', opening.untitled === 0, `${opening.untitled} control(s) with no hover text`);
@@ -228,15 +235,21 @@ check('and it is still finished', reloaded.solved === true, reloaded.status);
 
 // 6. The game code round-trips through the URL.
 const viaCode = await page.evaluate(() => document.querySelector('.code').value);
+// Reloaded explicitly: navigating to a URL that differs only in its fragment does not
+// reload the page, so without this the app is still the one from the section above and the
+// check reads back a field nobody changed.
 await page.goto(`http://127.0.0.1:${port}${BASE}#${viaCode}`, { waitUntil: 'networkidle' });
+await page.reload({ waitUntil: 'networkidle' });
 await page.waitForFunction(() => globalThis.__ops?.session !== null, { timeout: 10_000 });
 await page.waitForTimeout(400);
 const fromCode = await page.evaluate(() => ({
-  title: globalThis.__ops.session.puzzle.title,
+  title: globalThis.__ops.session.title,
   code: document.querySelector('.code').value,
+  solved: globalThis.__ops.session.solved,
+  marks: globalThis.__ops.session.serialise(),
 }));
 check('a game code opens the puzzle it names', fromCode.code === viaCode, `${viaCode} -> ${fromCode.code}`);
-check('and it is a fresh board, not the finished one', /Heart|House|Tree/.test(fromCode.title), fromCode.title);
+check('and it is a fresh board, not the finished one', /Heart|House|Tree/.test(fromCode.title) && fromCode.solved === false && !fromCode.marks.includes('#'), `${fromCode.title}: "${fromCode.marks}"`);
 
 // 7. Generated puzzles — the whole point of M2. Made at a size and a difficulty, solvable
 // by reasoning, and the same code gives the same picture on any device.
@@ -244,8 +257,8 @@ const generated = await page.evaluate(async () => {
   const app = globalThis.__ops;
   const out = {};
   const makeOne = async (size, tier) => {
-    document.querySelector('.size').value = String(size);
-    document.querySelector('.tier').value = tier;
+    document.querySelector('[data-choice="size"]').value = String(size);
+    document.querySelector('[data-choice="tier"]').value = tier;
     document.querySelector('[data-act="new"]').click();
     await new Promise((r) => setTimeout(r, 2500));
     const puzzle = app.session.puzzle;
@@ -298,8 +311,8 @@ check('the same code gives back the same picture', reopened2.code === generated.
 // does not do yet.
 const hints = await page.evaluate(async () => {
   const app = globalThis.__ops;
-  document.querySelector('.size').value = '10';
-  document.querySelector('.tier').value = 'steady';
+  document.querySelector('[data-choice="size"]').value = '10';
+  document.querySelector('[data-choice="tier"]').value = 'steady';
   document.querySelector('[data-act="new"]').click();
   await new Promise((r) => setTimeout(r, 2500));
 
@@ -380,7 +393,7 @@ check('and it names the line, not the square', new RegExp(`row ${hints.brokenRow
 const demo = await page.evaluate(async () => {
   const app = globalThis.__ops;
   // Start from a known puzzle so "it came back" means something.
-  document.querySelector('.size').value = '10';
+  document.querySelector('[data-choice="size"]').value = '10';
   document.querySelector('[data-act="new"]').click();
   await new Promise((r) => setTimeout(r, 2500));
   const mine = app.session.serialise();
@@ -463,6 +476,205 @@ check('the printed sheet is an empty grid, not the answer', sheet.filled === 0, 
 check('and it has the clues on it', sheet.numbers > 10, `${sheet.numbers} numbers`);
 check('and the grid lines to write in', sheet.lines > 10, `${sheet.lines} lines`);
 check('and the code, so paper and screen are the same puzzle', sheet.hasCode && sheet.a4);
+
+// 12. The second puzzle, through the same shell.
+//
+// This is the milestone. Every check below goes through the same toolbar, the same canvas,
+// the same undo stack, the same hint button and the same save — and the shell has never
+// heard of a number puzzle. Where any of it had secretly been doing nonogram work, this is
+// where it shows.
+const second = await page.evaluate(async () => {
+  const app = globalThis.__ops;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const picker = document.querySelector('.puzzle');
+  picker.value = 'number-place';
+  picker.dispatchEvent(new Event('change'));
+  await sleep(2000);
+
+  const switched = {
+    choices: [...document.querySelectorAll('[data-choice]')].map((s) => s.dataset.choice),
+    tools: [...document.querySelectorAll('[data-act="tool"]')].map((b) => b.textContent),
+    id: app.session.module.id,
+  };
+
+  document.querySelector('[data-choice="size"]').value = '4';
+  document.querySelector('[data-choice="tier"]').value = 'gentle';
+  document.querySelector('[data-act="new"]').click();
+  await sleep(1500);
+
+  const scene = app.session.layout();
+  const puzzle = app.session.puzzle;
+  const board = {
+    rows: scene.rows,
+    band: scene.band,
+    margin: scene.margin,
+    shaded: scene.marks.filter((m) => m === 'shaded').length,
+    givens: puzzle.givens.filter(Boolean).length,
+    strong: scene.labels.every((l) => l.strong === true),
+    status: document.querySelector('.status').textContent,
+    cell: app.layout.cell,
+  };
+
+  // The help panel is the puzzle's own words now, not a paragraph about runs and clues.
+  document.querySelector('[data-act="help"]').click();
+  await sleep(150);
+  const help = document.querySelector('.help-body').textContent;
+  const helpTitle = document.querySelector('.help-title').textContent;
+  document.querySelector('[data-act="close-help"]').click();
+
+  const canvas = document.querySelector('.board');
+  const rect = canvas.getBoundingClientRect();
+  const fire = (type, col, row, id = 31) => {
+    const { cell, originX, originY } = app.layout;
+    canvas.dispatchEvent(new PointerEvent(type, {
+      pointerId: id, pointerType: 'mouse', isPrimary: true, bubbles: true,
+      clientX: rect.left + originX + (col + 0.5) * cell,
+      clientY: rect.top + originY + (row + 0.5) * cell,
+      button: 0, buttons: type === 'pointerup' ? 0 : 1,
+    }));
+  };
+  const pick = (value) => document.querySelector(`[data-tool="v${value}"]`).click();
+  const press = async (col, row) => {
+    fire('pointerdown', col, row);
+    fire('pointerup', col, row);
+    await sleep(30);
+  };
+
+  // A square the puzzle filled in cannot be changed, by any tool.
+  const givenAt = puzzle.givens.findIndex(Boolean);
+  const before = app.session.serialise();
+  pick(1);
+  await press(givenAt % 4, Math.floor(givenAt / 4));
+  document.querySelector('[data-tool="rub"]').click();
+  await press(givenAt % 4, Math.floor(givenAt / 4));
+  const afterGiven = app.session.serialise();
+
+  // A drag with a number must not scatter that number across the row. Started on a row
+  // with at least two empty squares, or a scattering bug would have nowhere to show.
+  const blanks = [...puzzle.givens.keys()].filter((i) => !puzzle.givens[i]);
+  const rowOf = (i) => Math.floor(i / 4);
+  const dragRow = [0, 1, 2, 3].find((r) => blanks.filter((i) => rowOf(i) === r).length >= 2);
+  const dragFrom = blanks.filter((i) => rowOf(i) === dragRow)[0] % 4;
+  pick(1);
+  fire('pointerdown', dragFrom, dragRow, 32);
+  for (let col = dragFrom + 1; col < 4; col++) fire('pointermove', col, dragRow, 32);
+  fire('pointerup', 3, dragRow, 32);
+  await sleep(150);
+  const afterDrag = app.session.serialise();
+  while (app.session.history.canUndo) app.session.undo();
+  await sleep(150);
+
+  // Now solve it, one number at a time, through the toolbar and the canvas.
+  for (const i of blanks) {
+    pick(puzzle.solution[i]);
+    await press(i % 4, Math.floor(i / 4));
+  }
+  await sleep(700);
+  const solved = {
+    solved: app.session.solved,
+    status: document.querySelector('.status').textContent,
+    state: app.session.serialise(),
+    banner: !document.querySelector('.finish-banner').hidden,
+    code: document.querySelector('.code').value,
+  };
+
+  // Break it, and ask. A repeat in a line is the mistake a child actually makes.
+  while (app.session.history.canUndo) app.session.undo();
+  await sleep(150);
+  const row = [0, 1, 2, 3].find(
+    (r) =>
+      blanks.some((i) => rowOf(i) === r) &&
+      [...puzzle.givens.keys()].some((i) => rowOf(i) === r && puzzle.givens[i]),
+  );
+  const copyFrom = [...puzzle.givens.keys()].find((i) => rowOf(i) === row && puzzle.givens[i]);
+  const spare = blanks.find((i) => rowOf(i) === row);
+  app.session.play({ col: spare % 4, row, value: puzzle.solution[copyFrom] }, 'break it');
+  await sleep(100);
+  document.querySelector('[data-act="hint"]').click();
+  await sleep(250);
+  const wrong = {
+    status: document.querySelector('.status').textContent,
+    lit: app.hintCells.length,
+    board: app.session.serialise(),
+  };
+
+  // And a real hint, in three strengths, on the same board put back right. Undone through
+  // the button rather than the session, because pressing Undo has to reset the hint ladder
+  // as well as the board — which is how this test found that it did not.
+  while (app.session.history.canUndo) {
+    document.querySelector('[data-act="undo"]').click();
+    await sleep(60);
+  }
+  await sleep(150);
+  const blank = app.session.serialise();
+  document.querySelector('[data-act="hint"]').click();
+  await sleep(200);
+  const one = {
+    status: document.querySelector('.status').textContent,
+    lit: app.hintCells.length,
+    board: app.session.serialise(),
+  };
+  document.querySelector('[data-act="hint"]').click();
+  await sleep(200);
+  const two = document.querySelector('.status').textContent;
+  document.querySelector('[data-act="hint"]').click();
+  await sleep(200);
+  const three = app.session.serialise();
+
+  // Both puzzles in one library, named by their module rather than by an id.
+  document.querySelector('[data-act="library"]').click();
+  await sleep(500);
+  const library = [...document.querySelectorAll('.lib-sub')].map((e) => e.textContent);
+  document.querySelector('[data-act="close-library"]').click();
+
+  return { switched, board, help, helpTitle, before, afterGiven, afterDrag, solved, wrong, blank, one, two, three, library };
+});
+
+check('switching puzzle type switches the whole toolbar', second.switched.id === 'number-place' && second.switched.choices.join(',') === 'size,tier,glyphs', `${second.switched.id}: ${second.switched.choices.join(', ')}`);
+check('and its tools are its numbers, not Fill and Cross out', second.switched.tools.join(',') === '1,2,3,4,5,6,Rub out', second.switched.tools.join(', '));
+check('a 4x4 is laid out with no clue margin', second.board.rows === 4 && second.board.margin.left === 0, `${second.board.rows} rows, margin ${second.board.margin.left}`);
+// The reason `band` stopped being a single number. A 6x6 would be {col:3,row:2} here.
+check('and banded by its boxes, across and down separately', second.board.band.col === 2 && second.board.band.row === 2, JSON.stringify(second.board.band));
+check('the squares the puzzle filled in are shaded and drawn heavier', second.board.shaded === second.board.givens && second.board.shaded > 0 && second.board.strong, `${second.board.shaded} shaded of ${second.board.givens} givens`);
+check('and the cells are still big enough to press', second.board.cell >= 22, `${second.board.cell}px cells`);
+check('the status line talks about squares, not about a picture', /of the squares filled in/.test(second.board.status), second.board.status);
+// The help panel was HTML in the shell, written about runs and clues. A second puzzle made
+// it read as nonsense; now the puzzle writes it.
+check('How to play is written by the puzzle that is open', /every column and every box/.test(second.help) && !/picture appears/.test(second.help), second.helpTitle);
+check('and it says which tools this puzzle has', /Rub out/.test(second.help) && /cannot be rubbed out/.test(second.help));
+check('a number the puzzle gave you cannot be changed or rubbed out', second.afterGiven === second.before, `"${second.before}" -> "${second.afterGiven}"`);
+// Dragging a 7 across a board scatters sevens nobody meant to put there, so this tool says
+// it does not drag — and the shell asks the tool rather than assuming.
+check('and dragging does not scatter a number across the row', second.afterDrag.replace(/\./g, '').length === second.before.replace(/\./g, '').length + 1, `${second.afterDrag}`);
+check('the board can be solved through the toolbar and the canvas', second.solved.solved === true, second.solved.status);
+check('and the app says so, and notices', /Finished/.test(second.solved.status) && second.solved.banner === true, second.solved.status);
+check('a wrong board is reported as wrong, naming the line', /there can only ever be one/.test(second.wrong.status) && second.wrong.lit === 4, `${second.wrong.lit} squares lit: ${second.wrong.status.slice(0, 80)}`);
+check('and it names the line, not the square', !/square \d/.test(second.wrong.status), second.wrong.status.slice(0, 80));
+check('the first hint says where to look and nothing else', second.one.lit >= 4 && second.one.board === second.blank, second.one.status);
+check('the second explains why, still without doing it', second.two !== second.one.status, second.two.slice(0, 80));
+check('and the third does it', second.three !== second.blank);
+check('both puzzles live in one library, named by their puzzle', second.library.some((s) => s.startsWith('Number Place')) && second.library.some((s) => s.startsWith('Picture Logic')), second.library.slice(0, 3).join(' | '));
+
+// 13. And the second puzzle's code opens the second puzzle.
+//
+// Reloaded explicitly. Navigating to a URL that differs only in its fragment does not
+// reload the page, so without this the app would still be the one from the section above
+// and the check would be reading back a field nobody had changed — which is the definition
+// of asking the app whether it did the right thing.
+await page.goto(`http://127.0.0.1:${port}${BASE}#${second.solved.code}`, { waitUntil: 'networkidle' });
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForFunction(() => globalThis.__ops?.session !== null, { timeout: 10_000 });
+await page.waitForTimeout(500);
+const reopenedSecond = await page.evaluate(() => ({
+  id: globalThis.__ops.session.module.id,
+  code: document.querySelector('.code').value,
+  picker: document.querySelector('.puzzle').value,
+  solved: globalThis.__ops.session.solved,
+  tools: [...document.querySelectorAll('[data-act="tool"]')].map((b) => b.textContent).join(','),
+}));
+check('a code says which puzzle it is, and the app opens that one', reopenedSecond.id === 'number-place' && reopenedSecond.code === second.solved.code, `${second.solved.code} -> ${reopenedSecond.code}`);
+check('and the toolbar follows it without being told', reopenedSecond.picker === 'number-place' && reopenedSecond.tools.endsWith('Rub out'), reopenedSecond.tools);
+check('and it is a fresh board, not the finished one', reopenedSecond.solved === false);
 
 check('nothing threw along the way', errors.length === 0, errors.slice(0, 3).join(' | '));
 

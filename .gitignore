@@ -2,3 +2,7 @@ node_modules
 dist
 smoke.png
 *.local
+
+# Vitest writes a timestamped config next to vitest.config.ts while it runs and
+# normally cleans it up; a run that is interrupted leaves one behind.
+vitest.config.ts.timestamp-*.mjs

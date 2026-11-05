@@ -68,6 +68,14 @@ body {
   margin: 0 4px;
 }
 
+/* The per-puzzle choices, built from whatever the chosen puzzle says it offers.
+   `contents` so the labels inside become toolbar items in their own right rather than one
+   crowded box: how many choices there are varies by puzzle, and they should wrap the way
+   everything else in the bar wraps. */
+.options {
+  display: contents;
+}
+
 .field {
   display: inline-flex;
   align-items: center;

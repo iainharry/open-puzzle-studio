@@ -17,7 +17,8 @@ function step(hint: ReturnType<typeof hintFor>): {
   tier: number;
   cells: readonly unknown[];
   why: string;
-  line?: { axis: 'row' | 'col'; index: number };
+  look?: readonly { col: number; row: number }[];
+  where?: string;
   moves?: readonly unknown[];
 } {
   if (hint.kind !== 'step') throw new Error(`expected a step, got "${hint.kind}"`);
@@ -51,9 +52,7 @@ describe('hint', () => {
     const after = play(puzzle, state, step(first).moves ?? []);
     const second = hintFor(puzzle, after);
     expect(second.kind).toBe('step');
-    const a = step(first).line!;
-    const b = step(second).line!;
-    expect(`${a.axis}${a.index}`).not.toBe(`${b.axis}${b.index}`);
+    expect(step(first).where).not.toBe(step(second).where);
   });
 
   /**
@@ -68,7 +67,11 @@ describe('hint', () => {
   it('says which line to look at, as data and not only as prose', () => {
     const { puzzle, state } = open();
     const found = step(hintFor(puzzle, state));
-    expect(found.line).toBeDefined();
+    // As cells rather than as an axis and an index: the shell and the demonstration both
+    // used to reconstruct the cells themselves, which meant they knew how a grid is laid
+    // out. See `src/core/types.ts`.
+    expect(found.look!.length).toBe(5);
+    expect(found.where).toMatch(/^(Row|Column) \d+$/);
     expect(found.why).toMatch(/Look at (row|column) \d+/);
   });
 
@@ -140,7 +143,9 @@ describe('hint', () => {
       const hint = hintFor(puzzle, wrong);
       expect(hint.kind).toBe('wrong');
       if (hint.kind !== 'wrong') throw new Error('expected a contradiction');
-      expect(hint.line.index).toBe(0);
+      // The whole of row 1, named as the cells it is: five of them, all on row 0.
+      expect(hint.look.length).toBe(5);
+      expect(hint.look.every((c) => c.row === 0)).toBe(true);
     });
 
     /** A square crossed in error is as contradictory as one filled in error, and harder
@@ -165,7 +170,7 @@ describe('hint', () => {
       }
       const hint = hintFor(puzzle, wrong);
       if (hint.kind !== 'wrong') throw new Error(`expected "wrong", got "${hint.kind}"`);
-      expect(hint.line).toBeDefined();
+      expect(hint.look.length).toBe(5);
       expect(hint).not.toHaveProperty('cells');
       expect(hint.why).toMatch(/row 1/);
       // And it does not quietly tell them the answer in the prose.

@@ -17,6 +17,13 @@ export interface Theme {
   readonly text: string;
   readonly dim: string;
   readonly highlight: string;
+  /**
+   * A square the puzzle fixed. A tint, not a fill: the number on top still has to read.
+   *
+   * Close to the background on purpose — it says "you cannot change this", which is a
+   * quieter thing to say than anything the player has put down.
+   */
+  readonly shade: string;
 }
 
 export const DARK: Theme = {
@@ -28,6 +35,7 @@ export const DARK: Theme = {
   text: '#e8edf5',
   dim: '#5a6472',
   highlight: '#6aa9ff',
+  shade: '#222831',
 };
 
 export const LIGHT: Theme = {
@@ -39,6 +47,7 @@ export const LIGHT: Theme = {
   text: '#1b2028',
   dim: '#99a1ae',
   highlight: '#2563eb',
+  shade: '#e3e6ec',
 };
 
 export interface Layout {
@@ -140,6 +149,9 @@ export function drawScene(
         // Inset by a pixel so neighbouring filled cells still read as separate squares
         // rather than as one slab.
         ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+      } else if (mark === 'shaded') {
+        ctx.fillStyle = theme.shade;
+        ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
       } else if (mark === 'crossed') {
         ctx.strokeStyle = theme.crossed;
         ctx.lineWidth = Math.max(1.5, cell * 0.08);
@@ -157,7 +169,7 @@ export function drawScene(
   // Grid lines, over the marks so a filled cell still shows its boundaries.
   ctx.lineWidth = 1;
   for (let c = 0; c <= scene.cols; c++) {
-    const heavy = scene.band > 0 && c % scene.band === 0;
+    const heavy = scene.band.col > 0 && c % scene.band.col === 0;
     ctx.strokeStyle = heavy || c === 0 || c === scene.cols ? theme.band : theme.grid;
     ctx.lineWidth = heavy || c === 0 || c === scene.cols ? 2 : 1;
     const x = Math.round(x0 + c * cell) + 0.5;
@@ -167,7 +179,7 @@ export function drawScene(
     ctx.stroke();
   }
   for (let r = 0; r <= scene.rows; r++) {
-    const heavy = scene.band > 0 && r % scene.band === 0;
+    const heavy = scene.band.row > 0 && r % scene.band.row === 0;
     ctx.strokeStyle = heavy || r === 0 || r === scene.rows ? theme.band : theme.grid;
     ctx.lineWidth = heavy || r === 0 || r === scene.rows ? 2 : 1;
     const y = Math.round(y0 + r * cell) + 0.5;
@@ -203,8 +215,13 @@ export function drawScene(
   // Labels last.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `${Math.round(cell * 0.52)}px system-ui, sans-serif`;
   for (const label of scene.labels) {
+    // Per label rather than once, because a number puzzle draws its givens heavier than
+    // what the player wrote, and a pencilled note smaller than either. There are a few
+    // dozen labels on the largest board, so the cost of setting the font each time is not
+    // worth a word of cleverness.
+    const size = Math.round(cell * 0.52 * (label.scale ?? 1));
+    ctx.font = `${label.strong === true ? '700 ' : ''}${size}px system-ui, sans-serif`;
     ctx.fillStyle = label.dim === true ? theme.dim : theme.text;
     ctx.fillText(
       label.text,

@@ -12,7 +12,7 @@
  */
 
 import { History, fingerprint } from './history.js';
-import type { AnyPuzzleModule, Cell, Scene } from './types.js';
+import type { AnyPuzzleModule, Cell, Description, Hint, Scene } from './types.js';
 
 export interface SessionOptions {
   /** Called after anything changes, so the shell can redraw and schedule a save. */
@@ -79,6 +79,35 @@ export class Session {
   /** What a press on a cell would mean, without doing it. */
   moveFor(at: Cell, tool: string): unknown {
     return this.module.hit(this.puzzle, this.state, at, tool);
+  }
+
+  /**
+   * The rest of `PuzzleModule`, with the puzzle and the state already supplied.
+   *
+   * These exist so the shell never has to reach for `session.state`, which it was doing
+   * through a cast — `(session as unknown as { state: unknown }).state` — to ask for a
+   * hint. A cast through `unknown` is the compiler being told to stop helping, and it was
+   * the only place in the app that knew the session had a private field at all.
+   */
+  hint(maxTier: number): Hint | null {
+    return this.module.hint ? this.module.hint(this.puzzle, this.state, maxTier) : null;
+  }
+
+  get tools(): ReturnType<AnyPuzzleModule['tools']> {
+    return this.module.tools(this.puzzle);
+  }
+
+  get title(): string {
+    return this.module.title(this.puzzle);
+  }
+
+  describe(): Description {
+    return this.module.describe(this.puzzle);
+  }
+
+  /** The board as paper wants it: no player state, so it cannot be the answer. */
+  printable(): Scene | null {
+    return this.module.printable ? this.module.printable(this.puzzle) : null;
   }
 
   /**

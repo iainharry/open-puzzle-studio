@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildScript } from '../demo.js';
 import { sheetHtml } from '../sheet.js';
 import { pictureLogic } from '../../puzzles/pictureLogic/index.js';
+import { numberPlace } from '../../puzzles/numberPlace/index.js';
 
 function heart() {
   return pictureLogic.generate({ kind: 'drawn' as const, picture: 'heart' });
@@ -75,7 +76,12 @@ describe('the demonstration script', () => {
 
 describe('the printed sheet', () => {
   const puzzle = heart();
-  const html = sheetHtml(pictureLogic.printable!(puzzle), 'Heart', 'picture-logic.d.heart.x');
+  const html = sheetHtml(
+    pictureLogic.printable!(puzzle),
+    'Heart',
+    'picture-logic.d.heart.x',
+    pictureLogic.blurb,
+  );
 
   /**
    * **The one that matters.** The sister project shipped a printable sheet that drew the
@@ -120,5 +126,84 @@ describe('the printed sheet', () => {
     const nasty = sheetHtml(pictureLogic.printable!(puzzle), '<script>x</script>', 'c');
     expect(nasty).not.toContain('<script>x');
     expect(nasty).toContain('&lt;script&gt;');
+  });
+
+  /**
+   * The line under the title used to be the words "Fill the squares the numbers describe."
+   * written into `sheet.ts`. True of the only puzzle that existed; nonsense about the
+   * second one, and printed on its sheets.
+   */
+  it('takes the line about what to do from the puzzle, not from this file', () => {
+    expect(html).toContain(pictureLogic.blurb);
+    expect(html).not.toContain(numberPlace.blurb);
+  });
+});
+
+/**
+ * The second puzzle on paper.
+ *
+ * Here the dangerous sheet is not one with the picture filled in but one with the player's
+ * working on it, or the whole answer. Same guarantee, same mechanism: `printable()` is
+ * handed no player state, so there is nothing for it to print but the starting board.
+ */
+describe('the printed Number Place sheet', () => {
+  const puzzle = numberPlace.generate(numberPlace.demoSpec!());
+  const sixSpec = numberPlace.normalise({ size: 6, tier: 'steady', seed: 'paper' });
+  const six = numberPlace.generate(sixSpec);
+  const html = sheetHtml(
+    numberPlace.printable!(six),
+    numberPlace.title(six),
+    'number-place.6.steady.n.paper',
+    numberPlace.blurb,
+  );
+  const givens = six.givens.filter(Boolean).length;
+
+  it('prints exactly the numbers the puzzle gave, and no others', () => {
+    // Three texts belong to the page itself: the title, the line about what to do, and the
+    // code along the bottom. Everything else in the SVG is a given.
+    const texts = (html.match(/<text /g) ?? []).length;
+    expect(texts).toBe(givens + 3);
+    expect(givens).toBeLessThan(36);
+  });
+
+  /** Shaded squares, so the paper says which numbers were given, as the screen does. */
+  it('tints the given squares rather than leaving the paper to guess', () => {
+    expect((html.match(/<rect /g) ?? []).length).toBe(givens);
+    expect(html).toContain('font-weight="700"');
+  });
+
+  /** The boxes have to be visible, and on a 6x6 they are 2 tall and 3 wide. */
+  it('draws the heavier box lines in both directions', () => {
+    const heavy = (html.match(/stroke-width="0.5"/g) ?? []).length;
+    // Seven lines each way, of which the box boundaries and the edges are heavy: columns
+    // 0, 3, 6 and rows 0, 2, 4, 6.
+    expect(heavy).toBe(3 + 4);
+  });
+
+  it('carries the code, so the paper and the screen are the same puzzle', () => {
+    expect(html).toContain('number-place.6.steady.n.paper');
+    expect(html).toContain(numberPlace.blurb);
+  });
+
+  it('is A4, vector, and small', () => {
+    expect(html).toMatch(/size: A4 portrait/);
+    expect(html).toMatch(/width="210mm" height="297mm"/);
+    expect(html).not.toContain('data:image');
+    expect(html.length).toBeLessThan(40_000);
+  });
+
+  it('prints a shape board as shapes', () => {
+    const shapes = numberPlace.generate(
+      numberPlace.normalise({ size: 4, tier: 'gentle', seed: 'paper', glyphs: 'shapes' }),
+    );
+    const sheet = sheetHtml(numberPlace.printable!(shapes), 'Shapes', 'c', numberPlace.blurb);
+    expect(sheet).toContain('●');
+    expect(sheet).not.toMatch(/>[1-9]<\/text>/);
+  });
+
+  it('is the demonstration board when that is what is open', () => {
+    expect(numberPlace.printable!(puzzle).labels.length).toBe(
+      puzzle.givens.filter(Boolean).length,
+    );
   });
 });
