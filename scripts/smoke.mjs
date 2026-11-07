@@ -347,11 +347,40 @@ const hints = await page.evaluate(async () => {
     const want = puzzle.rowClues[r].reduce((a, b) => a + b, 0);
     if (want < puzzle.cols) { row = r; break; }
   }
+  /**
+   * How much warm colour is in a row's clue margin.
+   *
+   * A clue whose line is finished and still does not match its numbers is drawn in a
+   * warning colour and underlined. This counts the pixels a player would see, in the
+   * margin where the numbers are, rather than asking the app what tone it chose.
+   */
+  const warmInMargin = (r) => {
+    const canvas = document.querySelector('.board');
+    const ctx = canvas.getContext('2d');
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const { cell, originX, originY } = app.layout;
+    const data = ctx.getImageData(
+      Math.round((originX - cell) * dpr),
+      Math.round((originY + r * cell) * dpr),
+      Math.round(cell * dpr),
+      Math.round(cell * dpr),
+    ).data;
+    let warm = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > data[i + 1] + 30 && data[i] > data[i + 2] + 30) warm++;
+    }
+    return warm;
+  };
+  await new Promise((r) => setTimeout(r, 300));
+  const warmBefore = warmInMargin(row);
+
   app.session.change('break it', () => {
     for (let col = 0; col < puzzle.cols; col++) {
       app.session.play({ col, row, mark: 'filled' }, 'wrong');
     }
   });
+  await new Promise((r) => setTimeout(r, 300));
+  const warmAfter = warmInMargin(row);
   document.querySelector('[data-act="hint"]').click();
   await new Promise((r) => setTimeout(r, 300));
   const wrong = {
@@ -372,7 +401,7 @@ const hints = await page.evaluate(async () => {
   const [hr, hg, hb] = ctx.getImageData(px, py, 1, 1).data;
   const accent = hb > hr + 20 && hb > 120;
 
-  return { blank, one, two, three, depthBefore, afterUndo, wrong, brokenRow: row + 1, accent, pixel: `${hr},${hg},${hb}` };
+  return { blank, one, two, three, depthBefore, afterUndo, wrong, brokenRow: row + 1, accent, pixel: `${hr},${hg},${hb}`, warmBefore, warmAfter };
 });
 check('the first hint says where to look and nothing else', /Row|Column/.test(hints.one.status) && hints.one.board === hints.blank, hints.one.status);
 check('and highlights that line on the board', hints.one.highlighted >= 5, `${hints.one.highlighted} squares lit`);
@@ -386,6 +415,10 @@ check('and the whole hint is one undo step', hints.afterUndo === hints.blank);
 check('a wrong board is reported as wrong, not deduced from', /cannot be right/.test(hints.wrong.status), hints.wrong.status.slice(0, 90));
 check('and the wrong line is visibly marked, over the squares already filled', hints.accent === true, `pixel at the row edge was ${hints.pixel}`);
 check('and it names the line, not the square', new RegExp(`row ${hints.brokenRow}\\b`, 'i').test(hints.wrong.status) && !/square \d/.test(hints.wrong.status), hints.wrong.status.slice(0, 90));
+// A clue that is finished and wrong has to *look* different from one that is merely
+// unfinished. Without this, the two states are drawn identically — which is how a player
+// came to read the one clue that had not gone faint as a fault in the app.
+check('a clue goes orange the moment its line is finished and wrong', hints.warmBefore === 0 && hints.warmAfter > 20, `warm pixels in the margin: ${hints.warmBefore} -> ${hints.warmAfter}`);
 
 // 10. The demonstration. Asked for as "a video", built as the app playing itself — so the
 // check is that a child watching it sees the board change with captions, and that it puts

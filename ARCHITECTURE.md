@@ -353,6 +353,64 @@ And one real bug the second puzzle's smoke run found in shared code: **Undo did 
 an open hint**, so pressing Hint twice, Undo, then Hint once gave away the answer to
 somebody who had asked for a nudge.
 
+## 11a. Three states for a clue, not two (M5a)
+
+The first piece of real usage evidence either app has produced, and it arrived as a
+screenshot and the question *"is this a bug?"*.
+
+The board had **all eight column clues faint and seven of the eight row clues faint**. The
+filled count was exactly right. Only row 1 was wrong: two separate squares where the clue
+said one block of two. The puzzle has exactly one answer (checked by exhaustive search,
+independently of this codebase) and the board was not it.
+
+The app was behaving correctly. The screen was not. A clue had only two appearances —
+faint when its line matched, ordinary otherwise — so **"you have not finished this line"
+and "this line is finished and wrong" were drawn identically**. The one clue that had not
+gone faint read as a fault in the app rather than as a line to look at again. An
+experienced adult reached that conclusion, asked a second AI, and was told the board was
+correct (it had checked the columns and the totals and stopped).
+
+`Label.dim?: boolean` is now `Label.tone?: 'faint' | 'warn'`. A warned clue is drawn in a
+warm colour, bold, **and underlined** — colour is never the only signal.
+
+### Why "finished and wrong" and not "already impossible"
+
+The solver can tell from `completeLine` whether a half-finished line has already gone
+wrong; one square crossed out in error is enough. Warning on that would be a better error
+detector and a worse puzzle: it turns the board into an oracle you can probe a square at a
+time, which is an assistance level, and those are deferred until a teacher asks for one.
+It would also run a dynamic program over every line on every frame.
+
+The warning fires only once **every square in the line has been decided** — at which point
+the player could have counted the runs and compared them. **It adds no information; it
+removes an ambiguity.** That distinction is the whole of the change.
+
+### Contrast, measured
+
+| | ratio on its background | |
+| --- | --- | --- |
+| dark, warn `#ff9166` | 8.19:1 | passes AA for all text |
+| light, warn `#c2410c` | 4.83:1 | passes AA for all text |
+| dark, faint `#5a6472` | 3.02:1 | clears the 3:1 large-text floor |
+| light, faint `#99a1ae` | **2.43:1** | **failed** — corrected to `#828b9b`, 3.20:1 |
+
+The faint colour was measured while the warning colour was being measured, and the light
+theme's turned out to be below the floor. A faint clue still carries information — "this
+line is right" — so it has to stay readable. Changed, and recorded here rather than
+slipped in.
+
+### How it is tested
+
+- Unit: an unfinished wrong line stays ordinary; a decided wrong line warns; putting the
+  mistake right returns it to faint; columns warn as readily as rows; an untouched board
+  never warns; a `0` clue on an empty line is right, not wrong.
+- Regression: **the player's actual board**, kept as a fixture, with its unique answer.
+  Asserts that all eight columns and rows 2–8 are faint, that exactly one clue warns, and
+  that it is row 1's.
+- Browser: counts the warm pixels in that row's clue margin before and after the line is
+  finished wrongly — 0 → 205. It asserts what a player would see, not what tone the app
+  decided to ask for.
+
 ## 12. Decisions deliberately deferred
 
 - **Cell size has no upper bound.** A 5×5 fills a desktop screen at 109px per cell, which
@@ -394,8 +452,12 @@ somebody who had asked for a nudge.
   is reasoning the player could have done, not a look at the back of the book.
 - **Hint counting is per puzzle, not per session.** Reopening a puzzle keeps the count,
   which is right, but there is no way to see it other than on finishing.
+- **A clue says "finished and wrong", never "wrong so far".** Deliberate — see §11a — but
+  it means a mistake made early can sit there for a long time before anything says so.
+  Hint catches it on request.
 - **Nothing has been watched being played.** Two apps, twenty-nine milestones, no
-  playtest. Every claim about what a child finds easy is a belief.
+  playtest. The one piece of real evidence so far (§11a) found a defect within minutes of
+  somebody looking at a board, which is the argument for the playtest in one sentence.
 
 ## Dependencies
 

@@ -22,6 +22,12 @@ finding the mistake while there are two puzzles is the cheap insurance. It was r
 shell turned out to have been quietly doing nonogram work in fourteen places, and
 `PuzzleModule` was missing seven things. See `ARCHITECTURE.md` §11.
 
+A clue has three appearances, not two: faint when its line is right, **orange and
+underlined when the line is finished and still does not match**, ordinary while there is
+something left to decide. The third one exists because a player sent in a board where
+everything had gone faint except one clue, and read that as a fault in the app rather than
+as a line to check — see `ARCHITECTURE.md` §11a.
+
 Still to come: pictures made from your own images, a worker so generation stops blocking
 the screen, and a third puzzle type — none of them before somebody has been watched
 playing these two.

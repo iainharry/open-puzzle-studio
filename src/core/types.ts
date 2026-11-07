@@ -60,8 +60,20 @@ export interface Label {
   readonly col: number;
   readonly row: number;
   readonly text: string;
-  /** Satisfied clues, completed rows: drawn faint rather than removed. */
-  readonly dim?: boolean;
+  /**
+   * How a clue is getting on. Absent is the ordinary appearance.
+   *
+   * Three states rather than two, and the third one was paid for. A clue used to be
+   * either faint (its line is right) or ordinary, which meant **"you have not finished
+   * this line"** and **"this line is finished and wrong"** looked identical. A player hit
+   * exactly that: every column clue faint, seven of eight row clues faint, one ordinary —
+   * and read the odd one out as a fault in the app rather than as a line to look at
+   * again.
+   *
+   * Presentational on purpose. What makes a clue faint or a warning is the puzzle's
+   * business; the renderer only needs to know which of three ways to draw it.
+   */
+  readonly tone?: 'faint' | 'warn';
   /** Fraction of the normal size. Under 1 for a note pencilled into a corner. */
   readonly scale?: number;
   /** Drawn heavier. A number the puzzle gave you, against one you worked out. */

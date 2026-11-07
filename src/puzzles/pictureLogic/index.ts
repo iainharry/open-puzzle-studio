@@ -305,7 +305,8 @@ export const pictureLogic: PuzzleModule<
     'The numbers tell you how many squares in a row are filled in, in order. A row marked 3 1 has a block of three, then at least one gap, then a single square. Fill in the right squares and a picture appears.',
     'Fill colours a square in. Press it again to clear it, and drag across several squares to do a whole run at once.',
     'Cross out marks a square you are sure is empty. This is not decoration — crossing out is how you work the rest out, and without it you are solving a harder puzzle than the one in front of you.',
-    'Press space to swap between Fill and Cross out. A clue goes faint when that line is finished.',
+    'Press space to swap between Fill and Cross out.',
+    'A clue goes faint when its line is right. If you finish a line and it still does not match its numbers, the clue turns orange and is underlined — that line needs looking at again. An ordinary clue just means there is still something to decide there.',
     'Every puzzle here can be worked out by reasoning. There is never a need to guess — and if you get stuck, Hint will show you the next step and why it works.',
   ],
 
@@ -488,6 +489,7 @@ export const pictureLogic: PuzzleModule<
     const labels: Label[] = [];
     for (let r = 0; r < puzzle.rows; r++) {
       const clue = puzzle.rowClues[r]!;
+      const tone = lineTone(puzzle, state, 'row', r);
       clue.forEach((n, i) => {
         labels.push({
           // Right-aligned against the grid: the last number of a clue always sits in the
@@ -495,19 +497,20 @@ export const pictureLogic: PuzzleModule<
           col: i - clue.length,
           row: r,
           text: String(n),
-          dim: lineDone(puzzle, state, 'row', r),
+          ...(tone ? { tone } : {}),
         });
       });
     }
     for (let c = 0; c < puzzle.cols; c++) {
       const clue = puzzle.colClues[c]!;
+      const tone = lineTone(puzzle, state, 'col', c);
       clue.forEach((n, i) => {
         labels.push({
           col: c,
           // Bottom-aligned against the grid, for the same reason.
           row: i - clue.length,
           text: String(n),
-          dim: lineDone(puzzle, state, 'col', c),
+          ...(tone ? { tone } : {}),
         });
       });
     }
@@ -572,23 +575,54 @@ export const pictureLogic: PuzzleModule<
   },
 };
 
-/** True when a line's filled cells already match its clue, so its numbers can go faint. */
-function lineDone(
+/**
+ * How a line's clue should look: faint when it is right, warned when it is finished and
+ * wrong, and ordinary while there is still something to decide.
+ *
+ * ## Why the third state exists
+ *
+ * Until it did, "you have not finished this line" and "this line is finished and wrong"
+ * looked identical. A player sent in a board where all eight column clues and seven of
+ * the eight row clues had gone faint, and asked whether the one remaining clue was a bug.
+ * It was not — that row held two separate squares where the clue said one block of two —
+ * but nothing on the screen distinguished a line still being worked on from a line that
+ * had been got wrong, so "the app is broken" was a reasonable reading.
+ *
+ * ## Why "finished and wrong" and not "already impossible"
+ *
+ * The solver can tell, from `completeLine`, whether a half-finished line has *already*
+ * gone wrong — one square crossed out in error is enough. Warning on that would be a
+ * better error detector and a worse puzzle: it turns the board into an oracle you can
+ * probe one square at a time, which is an assistance level, and those were deliberately
+ * deferred until a teacher asks for one.
+ *
+ * This warns only once every square in the line has been decided — at which point the
+ * player could have counted the runs themselves and compared. **It adds no information;
+ * it removes an ambiguity.** That is the whole of the change, and it is also why it is
+ * cheap: counting runs is one pass, where asking whether a line is still satisfiable is a
+ * dynamic program over every line on every frame.
+ */
+function lineTone(
   puzzle: PicturePuzzle,
   state: PictureState,
   axis: 'row' | 'col',
   index: number,
-): boolean {
+): 'faint' | 'warn' | undefined {
   const n = axis === 'row' ? puzzle.cols : puzzle.rows;
   const line: boolean[] = [];
+  let decided = true;
   for (let i = 0; i < n; i++) {
     const idx =
       axis === 'row' ? at(puzzle.cols, i, index) : at(puzzle.cols, index, i);
-    line.push(state.marks[idx] === 'filled');
+    const mark = state.marks[idx];
+    line.push(mark === 'filled');
+    if (mark === 'empty') decided = false;
   }
   const want = axis === 'row' ? puzzle.rowClues[index]! : puzzle.colClues[index]!;
   const have = cluesFor(line);
-  return have.length === want.length && have.every((v, i) => v === want[i]);
+  if (have.length === want.length && have.every((v, i) => v === want[i])) return 'faint';
+  // Decided and still not matching: there is nothing left to add here, so it is wrong.
+  return decided ? 'warn' : undefined;
 }
 
 

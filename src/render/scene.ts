@@ -16,6 +16,14 @@ export interface Theme {
   readonly crossed: string;
   readonly text: string;
   readonly dim: string;
+  /**
+   * A clue whose line is finished and does not match it.
+   *
+   * Warm against both themes, and never the *only* signal: a warned clue is underlined
+   * too, so it is still distinguishable in greyscale and to somebody who cannot separate
+   * red from grey. Colour alone is not an indicator.
+   */
+  readonly warn: string;
   readonly highlight: string;
   /**
    * A square the puzzle fixed. A tint, not a fill: the number on top still has to read.
@@ -33,7 +41,9 @@ export const DARK: Theme = {
   filled: '#e8edf5',
   crossed: '#5a6472',
   text: '#e8edf5',
+  // 3.02:1, which clears the 3:1 floor for large text by a whisker. Measured, not chosen.
   dim: '#5a6472',
+  warn: '#ff9166',
   highlight: '#6aa9ff',
   shade: '#222831',
 };
@@ -45,7 +55,12 @@ export const LIGHT: Theme = {
   filled: '#1b2028',
   crossed: '#99a1ae',
   text: '#1b2028',
-  dim: '#99a1ae',
+  // 3.20:1 against this background, where the old value was 2.43:1 — below the 3:1 floor
+  // for large text, which meant a satisfied clue was not reliably readable. A faint clue
+  // still carries information ("this line is right"), so it has to stay legible; it was
+  // measured while the warning colour was being measured, and corrected then.
+  dim: '#828b9b',
+  warn: '#c2410c',
   highlight: '#2563eb',
   shade: '#e3e6ec',
 };
@@ -221,13 +236,30 @@ export function drawScene(
     // dozen labels on the largest board, so the cost of setting the font each time is not
     // worth a word of cleverness.
     const size = Math.round(cell * 0.52 * (label.scale ?? 1));
-    ctx.font = `${label.strong === true ? '700 ' : ''}${size}px system-ui, sans-serif`;
-    ctx.fillStyle = label.dim === true ? theme.dim : theme.text;
-    ctx.fillText(
-      label.text,
-      x0 + label.col * cell + cell / 2,
-      y0 + label.row * cell + cell / 2,
-    );
+    const warn = label.tone === 'warn';
+    ctx.font = `${label.strong === true || warn ? '700 ' : ''}${size}px system-ui, sans-serif`;
+    ctx.fillStyle = label.tone === 'faint' ? theme.dim : warn ? theme.warn : theme.text;
+    const cx = x0 + label.col * cell + cell / 2;
+    const cy = y0 + label.row * cell + cell / 2;
+    ctx.fillText(label.text, cx, cy);
+
+    /**
+     * A warned clue is underlined as well as coloured.
+     *
+     * Colour on its own is not an indicator: a child who cannot separate warm from grey,
+     * or a sheet read in sunlight, gets nothing from it. The rule costs four lines here
+     * and is the difference between a signal and a decoration.
+     */
+    if (warn) {
+      const half = Math.max(size * 0.34, ctx.measureText(label.text).width / 2);
+      ctx.strokeStyle = theme.warn;
+      ctx.lineWidth = Math.max(1.5, cell * 0.055);
+      ctx.beginPath();
+      const uy = Math.round(cy + size * 0.62) + 0.5;
+      ctx.moveTo(cx - half, uy);
+      ctx.lineTo(cx + half, uy);
+      ctx.stroke();
+    }
   }
 
   return layout;

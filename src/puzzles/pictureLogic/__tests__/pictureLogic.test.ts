@@ -188,10 +188,74 @@ describe('the scene', () => {
   it('dims a clue once its line is right', () => {
     const session = open();
     const before = session.layout().labels.find((l) => l.row === 1 && l.col < 0)!;
-    expect(before.dim).toBe(false);
+    expect(before.tone).toBeUndefined();
     for (let col = 0; col < 5; col++) session.play({ col, row: 1, mark: 'filled' });
     const after = session.layout().labels.find((l) => l.row === 1 && l.col < 0)!;
-    expect(after.dim).toBe(true);
+    expect(after.tone).toBe('faint');
+  });
+
+  /**
+   * **The three states, and the one that was missing.** Until this existed, "you have not
+   * finished this line" and "this line is finished and wrong" looked exactly the same,
+   * and a player read the odd clue out as a fault in the app.
+   */
+  describe('a clue that is finished and wrong', () => {
+    const clueFor = (session: ReturnType<typeof open>, row: number) =>
+      session.layout().labels.find((l) => l.row === row && l.col < 0)!;
+
+    it('says nothing while there is still something to decide', () => {
+      const session = open();
+      // Row 1 of the heart is a run of 5. Four filled and nothing crossed out: wrong so
+      // far, but not finished, so it must stay ordinary.
+      for (let col = 0; col < 4; col++) session.play({ col, row: 1, mark: 'filled' });
+      expect(clueFor(session, 1).tone).toBeUndefined();
+    });
+
+    it('warns once every square in the line has been decided and it still does not match', () => {
+      const session = open();
+      for (let col = 0; col < 4; col++) session.play({ col, row: 1, mark: 'filled' });
+      // The last square crossed out: the line is now decided, and [4] is not [5].
+      session.play({ col: 4, row: 1, mark: 'crossed' });
+      expect(clueFor(session, 1).tone).toBe('warn');
+    });
+
+    it('goes back to faint when the mistake is put right', () => {
+      const session = open();
+      for (let col = 0; col < 4; col++) session.play({ col, row: 1, mark: 'filled' });
+      session.play({ col: 4, row: 1, mark: 'crossed' });
+      expect(clueFor(session, 1).tone).toBe('warn');
+      session.play({ col: 4, row: 1, mark: 'filled' });
+      expect(clueFor(session, 1).tone).toBe('faint');
+    });
+
+    it('warns on a column as readily as on a row', () => {
+      const session = open();
+      // Column 2 of the heart is [4] — rows 1 to 4. Decide the whole of it as [1, 3]
+      // instead: the right number of squares, in the wrong places.
+      for (let row = 0; row < 5; row++) {
+        session.play({ col: 2, row, mark: row === 1 ? 'crossed' : 'filled' });
+      }
+      const clue = session.layout().labels.find((l) => l.col === 2 && l.row < 0)!;
+      expect(clue.tone).toBe('warn');
+    });
+
+    /** An untouched board has nothing wrong with it, whatever the clues say. */
+    it('never warns about a board nobody has touched', () => {
+      for (const picture of ['heart', 'house', 'tree']) {
+        const scene = open(picture).layout();
+        expect(scene.labels.some((l) => l.tone === 'warn')).toBe(false);
+      }
+    });
+
+    /** A clue of 0 is satisfied by an empty line, decided or not. */
+    it('treats an empty line with a zero clue as right, not as wrong', () => {
+      const session = open();
+      const puzzle = session.puzzle as { rowClues: number[][] };
+      const zero = puzzle.rowClues.findIndex((c) => c.length === 1 && c[0] === 0);
+      if (zero === -1) return;
+      for (let col = 0; col < 5; col++) session.play({ col, row: zero, mark: 'crossed' });
+      expect(clueFor(session, zero).tone).toBe('faint');
+    });
   });
 });
 
@@ -254,5 +318,85 @@ describe('the solver', () => {
       expect(report.solved).toBe(true);
       expect(report.steps.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * A real board a real player got stuck on, kept as a regression.
+ *
+ * Every one of the eight column clues was satisfied and so were seven of the eight rows.
+ * The filled count was exactly right. Only row 1 was wrong — two separate squares where
+ * the clue said one block of two — and the screen's only signal was that one clue had not
+ * gone faint, which is indistinguishable from a line nobody has finished yet.
+ *
+ * The puzzle has exactly one answer; this board is not it. Both of those are asserted
+ * here rather than taken on trust, because the player had been told by another tool that
+ * the board was correct.
+ */
+describe('the board from the screenshot', () => {
+  const answer = [
+    '##......',
+    '.#......',
+    '.#####..',
+    '....#...',
+    '.#####..',
+    '####....',
+    '.##.....',
+    '........',
+  ];
+  const played = [
+    '.#...#..',
+    '.#......',
+    '#####...',
+    '....#...',
+    '.#####..',
+    '####....',
+    '.##.....',
+    '........',
+  ];
+  const puzzle: PicturePuzzle = {
+    rows: 8,
+    cols: 8,
+    title: '8x8',
+    tierUsed: 2,
+    solution: answer.flatMap((r) => [...r].map((ch) => ch === '#')),
+    rowClues: [[2], [1], [5], [1], [5], [4], [2], [0]],
+    colClues: [[1, 1], [3, 3], [1, 3], [1, 2], [3], [1, 1], [0], [0]],
+  };
+  // Everything decided: filled where the player filled, crossed everywhere else, which is
+  // how the board in the screenshot actually stood.
+  const state: PictureState = {
+    marks: played.flatMap((r) => [...r].map((ch) => (ch === '#' ? 'filled' : 'crossed'))),
+  };
+
+  it('is not solved, however right it looks', () => {
+    expect(pictureLogic.isSolved(puzzle, state)).toBe(false);
+  });
+
+  it('has every column right and every row but the first', () => {
+    const scene = pictureLogic.layout(puzzle, state);
+    const columns = scene.labels.filter((l) => l.row < 0);
+    expect(columns.every((l) => l.tone === 'faint')).toBe(true);
+    for (const row of [1, 2, 3, 4, 5, 6, 7]) {
+      const clue = scene.labels.find((l) => l.row === row && l.col < 0)!;
+      expect(clue.tone).toBe('faint');
+    }
+  });
+
+  /** **The fix.** The one wrong line is now marked as wrong rather than as unfinished. */
+  it('marks the one wrong line as wrong, not as unfinished', () => {
+    const scene = pictureLogic.layout(puzzle, state);
+    const first = scene.labels.find((l) => l.row === 0 && l.col < 0)!;
+    expect(first.text).toBe('2');
+    expect(first.tone).toBe('warn');
+    expect(scene.labels.filter((l) => l.tone === 'warn').length).toBe(1);
+  });
+
+  it('and the hint says the same thing in words', () => {
+    const hint = pictureLogic.hint!(puzzle, state, 3);
+    expect(hint.kind).toBe('wrong');
+    if (hint.kind !== 'wrong') throw new Error('expected a contradiction');
+    expect(hint.why).toMatch(/row 1 cannot be right/);
+    expect(hint.look.every((c) => c.row === 0)).toBe(true);
   });
 });
